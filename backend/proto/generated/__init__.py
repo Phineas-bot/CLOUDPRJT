@@ -1,0 +1,1 @@
+# Generated protobuf modules will live here after running scripts/gen_protos.ps1
