@@ -5,8 +5,9 @@ import uuid
 from typing import Optional
 
 import grpc
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Response
 from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
 
 try:
     from backend.proto.generated import distributed_storage_pb2 as pb2
@@ -125,6 +126,32 @@ async def upload_chunk(
         )
 
     return ChunkUploadResponse(ok=True, reason=None)
+
+
+@app.get("/download/{file_id}")
+async def download_file(file_id: str):
+    channel, stub = await _master_stub()
+    async with channel:
+        meta = await stub.GetFileMetadata(pb2.FileMetadataRequest(file_id=file_id))
+    if not meta.file_id:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    # Sort placements by index to rebuild original order
+    ordered = sorted(meta.placements, key=lambda p: p.chunk_index)
+    chunks: list[bytes] = []
+    for placement in ordered:
+        if not placement.replicas:
+            raise HTTPException(status_code=502, detail=f"no replicas for chunk {placement.chunk_id}")
+        target = placement.replicas[0]
+        channel, stub = await _storage_stub(target.host, target.grpc_port)
+        async with channel:
+            resp = await stub.DownloadChunk(pb2.DownloadChunkRequest(chunk_id=placement.chunk_id))
+        if not resp.ok:
+            raise HTTPException(status_code=502, detail=f"chunk fetch failed: {resp.reason}")
+        chunks.append(resp.data)
+
+    blob = b"".join(chunks)
+    return Response(content=blob, media_type="application/octet-stream")
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -88,6 +88,7 @@ class MasterGrpc(pb2_grpc.MasterServiceServicer):
         record = self.service.get_file_metadata(request.file_id)
         if not record:
             return pb2.FileMetadataResponse()
+        node_lookup = {n.node_id: n for n in self.service.store.list_healthy_nodes()}
         return pb2.FileMetadataResponse(
             file_id=record.file_id,
             file_name=record.file_name,
@@ -98,7 +99,14 @@ class MasterGrpc(pb2_grpc.MasterServiceServicer):
                     chunk_id=p.chunk_id,
                     chunk_index=p.chunk_index,
                     replicas=[
-                        pb2.NodeDescriptor(node_id=r, host="", grpc_port=0, capacity_bytes=0, free_bytes=0, mac="")
+                        pb2.NodeDescriptor(
+                            node_id=r,
+                            host=node_lookup.get(r, None).host if r in node_lookup else "",
+                            grpc_port=node_lookup.get(r, None).grpc_port if r in node_lookup else 0,
+                            capacity_bytes=node_lookup.get(r, None).capacity_bytes if r in node_lookup else 0,
+                            free_bytes=node_lookup.get(r, None).free_bytes if r in node_lookup else 0,
+                            mac=node_lookup.get(r, None).mac if r in node_lookup else "",
+                        )
                         for r in p.replicas
                     ],
                 )

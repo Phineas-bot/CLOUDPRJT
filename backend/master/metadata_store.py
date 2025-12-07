@@ -63,6 +63,10 @@ class MetadataStore:
             if node:
                 node.healthy = False
 
+    def get_node(self, node_id: str) -> Optional[NodeState]:
+        with self._lock:
+            return self._nodes.get(node_id)
+
     def list_healthy_nodes(self) -> List[NodeState]:
         now = time.time()
         with self._lock:
