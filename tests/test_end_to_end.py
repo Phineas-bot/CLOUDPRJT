@@ -4,6 +4,7 @@ from contextlib import AsyncExitStack
 
 import grpc
 import httpx
+from httpx import ASGITransport
 import pytest
 
 from backend.common.config import Settings
@@ -60,7 +61,8 @@ async def test_upload_and_download_roundtrip(tmp_path, monkeypatch):
     file_bytes = b"hello e2e world"
 
     async with AsyncExitStack() as stack:
-        client = httpx.AsyncClient(app=app, base_url="http://test")
+        transport = ASGITransport(app=app)
+        client = httpx.AsyncClient(transport=transport, base_url="http://test")
         await stack.enter_async_context(client)
 
         # Plan upload
