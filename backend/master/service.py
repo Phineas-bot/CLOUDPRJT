@@ -27,11 +27,22 @@ class MasterService:
     def heartbeat(self, node_id: str, free_bytes: int, load_factor: float) -> bool:
         return self.store.update_heartbeat(node_id, free_bytes, load_factor)
 
-    def get_upload_plan(self, file_name: str, file_size: int, requested_chunk_size: Optional[int] = None) -> tuple[int, list[ChunkPlacement]]:
+    def get_upload_plan(self, file_id: str, file_name: str, file_size: int, requested_chunk_size: Optional[int] = None) -> tuple[int, list[ChunkPlacement]]:
         if requested_chunk_size and requested_chunk_size > 0:
             self.settings.chunk_size = requested_chunk_size
         healthy = self.store.list_healthy_nodes()
-        return placement.plan_upload(file_name, file_size, self.settings, healthy)
+        chunk_size, placements = placement.plan_upload(file_id, file_name, file_size, self.settings, healthy)
+
+        # Persist initial file record with planned placements
+        record = FileRecord(
+            file_id=file_id,
+            file_name=file_name,
+            file_size=file_size,
+            chunk_size=chunk_size,
+            placements=placements,
+        )
+        self.store.put_file(record)
+        return chunk_size, placements
 
     def record_chunk_stored(self, file_id: str, file_name: str, file_size: int, chunk_size: int, chunk_id: str, chunk_index: int, node_id: str) -> None:
         record = self.store.get_file(file_id)
@@ -44,7 +55,7 @@ class MasterService:
                 placements=[],
             )
             self.store.put_file(record)
-        self.store.update_chunk_replica(file_id, chunk_id, node_id)
+        self.store.update_chunk_replica(file_id, chunk_id, chunk_index, node_id)
 
     def get_file_metadata(self, file_id: str) -> Optional[FileRecord]:
         return self.store.get_file(file_id)

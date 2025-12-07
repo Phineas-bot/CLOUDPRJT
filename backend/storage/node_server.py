@@ -1,4 +1,4 @@
-import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -35,8 +35,20 @@ class StorageNode:
                 parent.rmdir()
         return True
 
+    @staticmethod
+    def parse_chunk_id(chunk_id: str) -> tuple[str, int]:
+        if ":" in chunk_id:
+            file_id, idx = chunk_id.rsplit(":", 1)
+            try:
+                return file_id, int(idx)
+            except ValueError:
+                return chunk_id, 0
+        return chunk_id, 0
+
     def disk_stats(self) -> tuple[int, int]:
-        usage = os.statvfs(str(self.data_dir))
-        capacity = usage.f_blocks * usage.f_frsize
-        free = usage.f_bavail * usage.f_frsize
-        return capacity, free
+        # Cross-platform disk stats
+        try:
+            usage = shutil.disk_usage(self.data_dir)
+            return usage.total, usage.free
+        except Exception:
+            return 0, 0

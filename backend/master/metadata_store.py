@@ -81,14 +81,21 @@ class MetadataStore:
         with self._lock:
             return self._files.get(file_id)
 
-    def update_chunk_replica(self, file_id: str, chunk_id: str, node_id: str) -> None:
+    def update_chunk_replica(self, file_id: str, chunk_id: str, chunk_index: int, node_id: str) -> None:
         with self._lock:
             rec = self._files.get(file_id)
             if not rec:
                 return
+            target = None
             for placement in rec.placements:
-                if placement.chunk_id == chunk_id and node_id not in placement.replicas:
-                    placement.replicas.append(node_id)
+                if placement.chunk_id == chunk_id:
+                    target = placement
+                    break
+            if target is None:
+                target = ChunkPlacement(chunk_id=chunk_id, chunk_index=chunk_index, replicas=[])
+                rec.placements.append(target)
+            if node_id not in target.replicas:
+                target.replicas.append(node_id)
 
     def overdue_nodes(self) -> List[NodeState]:
         now = time.time()

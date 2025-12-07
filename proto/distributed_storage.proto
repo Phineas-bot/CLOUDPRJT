@@ -32,9 +32,10 @@ message HeartbeatResponse {
 }
 
 message UploadPlanRequest {
-  string file_name = 1;
-  int64 file_size = 2;
-  int64 chunk_size = 3; // requested chunk size in bytes
+  string file_id = 1;
+  string file_name = 2;
+  int64 file_size = 3;
+  int64 chunk_size = 4; // requested chunk size in bytes
 }
 message ChunkPlacement {
   string chunk_id = 1;
@@ -42,9 +43,10 @@ message ChunkPlacement {
   repeated NodeDescriptor replicas = 3;
 }
 message UploadPlanResponse {
-  repeated ChunkPlacement placements = 1;
-  int64 chunk_size = 2; // actual chunk size master chose
-  int32 replication_factor = 3;
+  string file_id = 1;
+  repeated ChunkPlacement placements = 2;
+  int64 chunk_size = 3; // actual chunk size master chose
+  int32 replication_factor = 4;
 }
 
 message ReportChunkStoredRequest {

@@ -11,14 +11,14 @@ def _pick_nodes(nodes: List[NodeState], replication: int) -> List[NodeState]:
     return sorted_nodes[:replication]
 
 
-def plan_upload(file_name: str, file_size: int, settings: Settings | None, healthy_nodes: List[NodeState]) -> Tuple[int, List[ChunkPlacement]]:
+def plan_upload(file_id: str, file_name: str, file_size: int, settings: Settings | None, healthy_nodes: List[NodeState]) -> Tuple[int, List[ChunkPlacement]]:
     cfg = settings or load_settings()
     chunk_size = cfg.chunk_size
     total_chunks = math.ceil(file_size / chunk_size) if file_size else 1
     placements: List[ChunkPlacement] = []
 
     for idx in range(total_chunks):
-        chunk_id = secrets.token_hex(16)
+        chunk_id = f"{file_id}:{idx}"
         target_nodes = _pick_nodes(healthy_nodes, cfg.replication_factor)
         placements.append(
             ChunkPlacement(

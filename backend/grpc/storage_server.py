@@ -24,14 +24,15 @@ class StorageGrpc(pb2_grpc.StorageServiceServicer):
         return pb2.UploadChunkResponse(ok=ok, reason="")
 
     async def DownloadChunk(self, request, context):
-        # chunk_id maps to file_id; simple scheme chunk_id = file_id:chunk_index could be added later
-        data = self.node.read_chunk(request.chunk_id, 0)
+        file_id, idx = self.node.parse_chunk_id(request.chunk_id)
+        data = self.node.read_chunk(file_id, idx)
         if data is None:
             return pb2.DownloadChunkResponse(ok=False, data=b"", reason="not found")
         return pb2.DownloadChunkResponse(ok=True, data=data, reason="")
 
     async def DeleteChunk(self, request, context):
-        ok = self.node.delete_chunk(request.chunk_id, 0)
+        file_id, idx = self.node.parse_chunk_id(request.chunk_id)
+        ok = self.node.delete_chunk(file_id, idx)
         return pb2.DeleteChunkResponse(ok=ok, reason="")
 
     async def HealthCheck(self, request, context):
@@ -58,8 +59,56 @@ async def serve(args: Optional[argparse.Namespace] = None) -> None:
     pb2_grpc.add_StorageServiceServicer_to_server(StorageGrpc(node), server)
     server.add_insecure_port(_address(args.host, args.port))
     logging.info("Storage node %s listening on %s", args.node_id, _address(args.host, args.port))
+
+    # Register with master if configured
+    master_host = os.getenv("DFS_MASTER_HOST", "localhost")
+    master_port = int(os.getenv("DFS_MASTER_PORT", "50050"))
+    register_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
+    register_stub = pb2_grpc.MasterServiceStub(register_channel)
+    capacity, free = node.disk_stats()
+    public_host = os.getenv("NODE_PUBLIC_HOST", args.host)
+    try:
+        async with register_channel:
+            await register_stub.RegisterNode(
+                pb2.RegisterNodeRequest(
+                    node=pb2.NodeDescriptor(
+                        node_id=args.node_id,
+                        host=public_host,
+                        grpc_port=args.port,
+                        capacity_bytes=capacity,
+                        free_bytes=free,
+                        mac="",
+                    )
+                )
+            )
+            logging.info("Registered node %s with master %s:%s", args.node_id, master_host, master_port)
+    except Exception as exc:  # pragma: no cover - network/env issues
+        logging.warning("Failed to register node with master: %s", exc)
+
+    # Heartbeat loop
+    hb_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
+    hb_stub = pb2_grpc.MasterServiceStub(hb_channel)
+    interval = int(os.getenv("DFS_HEARTBEAT_INTERVAL", "5"))
+
+    async def heartbeat_task():
+        while True:
+            try:
+                _, free_bytes = node.disk_stats()
+                await hb_stub.Heartbeat(
+                    pb2.HeartbeatRequest(node_id=args.node_id, load_factor=0.0, free_bytes=free_bytes)
+                )
+            except Exception as exc:  # pragma: no cover
+                logging.warning("Heartbeat failed: %s", exc)
+            await asyncio.sleep(interval)
+
+    task = asyncio.create_task(heartbeat_task())
+
     await server.start()
-    await server.wait_for_termination()
+    try:
+        await server.wait_for_termination()
+    finally:
+        task.cancel()
+        await hb_channel.close()
 
 
 if __name__ == "__main__":  # pragma: no cover
