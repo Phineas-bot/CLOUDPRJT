@@ -52,6 +52,16 @@ def _address(host: str, port: int) -> str:
     return f"{host}:{port}"
 
 
+async def heartbeat_loop(node: StorageNode, stub: pb2_grpc.MasterServiceStub, node_id: str, interval: float) -> None:
+    while True:
+        try:
+            _, free_bytes = node.disk_stats()
+            await stub.Heartbeat(pb2.HeartbeatRequest(node_id=node_id, load_factor=0.0, free_bytes=free_bytes))
+        except Exception as exc:  # pragma: no cover
+            logging.warning("Heartbeat failed: %s", exc)
+        await asyncio.sleep(interval)
+
+
 async def serve(args: Optional[argparse.Namespace] = None) -> None:
     args = args or _parse_args()
     node = StorageNode(args.node_id, args.data_dir)
@@ -89,19 +99,7 @@ async def serve(args: Optional[argparse.Namespace] = None) -> None:
     hb_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
     hb_stub = pb2_grpc.MasterServiceStub(hb_channel)
     interval = int(os.getenv("DFS_HEARTBEAT_INTERVAL", "5"))
-
-    async def heartbeat_task():
-        while True:
-            try:
-                _, free_bytes = node.disk_stats()
-                await hb_stub.Heartbeat(
-                    pb2.HeartbeatRequest(node_id=args.node_id, load_factor=0.0, free_bytes=free_bytes)
-                )
-            except Exception as exc:  # pragma: no cover
-                logging.warning("Heartbeat failed: %s", exc)
-            await asyncio.sleep(interval)
-
-    task = asyncio.create_task(heartbeat_task())
+    task = asyncio.create_task(heartbeat_loop(node, hb_stub, args.node_id, interval))
 
     await server.start()
     try:
