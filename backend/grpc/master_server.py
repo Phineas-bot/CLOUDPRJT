@@ -114,12 +114,15 @@ def _server_address() -> str:
 
 
 async def _monitor_nodes(service: MasterService, interval: float) -> None:
-    while True:
-        overdue = service.store.overdue_nodes()
-        for node in overdue:
-            service.store.mark_unhealthy(node.node_id)
-            logging.warning("Node %s marked unhealthy (last_seen=%.1fs ago)", node.node_id, time.time() - node.last_seen)
-        await asyncio.sleep(interval)
+    try:
+        while True:
+            overdue = service.store.overdue_nodes()
+            for node in overdue:
+                service.store.mark_unhealthy(node.node_id)
+                logging.warning("Node %s marked unhealthy (last_seen=%.1fs ago)", node.node_id, time.time() - node.last_seen)
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:  # graceful shutdown
+        return
 
 
 async def serve() -> None:

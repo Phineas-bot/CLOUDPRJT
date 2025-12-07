@@ -53,13 +53,16 @@ def _address(host: str, port: int) -> str:
 
 
 async def heartbeat_loop(node: StorageNode, stub: pb2_grpc.MasterServiceStub, node_id: str, interval: float) -> None:
-    while True:
-        try:
-            _, free_bytes = node.disk_stats()
-            await stub.Heartbeat(pb2.HeartbeatRequest(node_id=node_id, load_factor=0.0, free_bytes=free_bytes))
-        except Exception as exc:  # pragma: no cover
-            logging.warning("Heartbeat failed: %s", exc)
-        await asyncio.sleep(interval)
+    try:
+        while True:
+            try:
+                _, free_bytes = node.disk_stats()
+                await stub.Heartbeat(pb2.HeartbeatRequest(node_id=node_id, load_factor=0.0, free_bytes=free_bytes))
+            except Exception as exc:  # pragma: no cover
+                logging.warning("Heartbeat failed: %s", exc)
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:  # graceful shutdown
+        return
 
 
 async def serve(args: Optional[argparse.Namespace] = None) -> None:
