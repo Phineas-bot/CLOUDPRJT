@@ -54,6 +54,25 @@ async def health():
     return {"ok": True}
 
 
+@app.get("/admin/nodes")
+async def list_nodes():
+    channel, stub = await _master_stub()
+    async with channel:
+        reply = await stub.ListNodes(pb2.ListNodesRequest())
+    return [
+        {
+            "node_id": n.node_id,
+            "host": n.host,
+            "grpc_port": n.grpc_port,
+            "capacity_bytes": n.capacity_bytes,
+            "free_bytes": n.free_bytes,
+            "healthy": n.healthy,
+            "last_seen": n.last_seen,
+        }
+        for n in reply.nodes
+    ]
+
+
 @app.post("/plan", response_model=UploadPlanResponse)
 async def get_plan(req: UploadPlanRequest):
     file_id = req.file_id or uuid.uuid4().hex
@@ -140,9 +159,10 @@ async def download_file(file_id: str):
     ordered = sorted(meta.placements, key=lambda p: p.chunk_index)
     chunks: list[bytes] = []
     for placement in ordered:
-        if not placement.replicas:
+        available = [r for r in placement.replicas if r.host and r.grpc_port]
+        if not available:
             raise HTTPException(status_code=502, detail=f"no replicas for chunk {placement.chunk_id}")
-        target = placement.replicas[0]
+        target = available[0]
         channel, stub = await _storage_stub(target.host, target.grpc_port)
         async with channel:
             resp = await stub.DownloadChunk(pb2.DownloadChunkRequest(chunk_id=placement.chunk_id))

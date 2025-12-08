@@ -11,7 +11,7 @@ from backend.common.config import Settings
 from backend.gateway.api import app
 from backend.grpc.master_server import MasterGrpc
 from backend.grpc.storage_server import StorageGrpc
-from backend.master.metadata_store import MetadataStore
+from backend.master.metadata_store import MetadataStore, FileRecord, ChunkPlacement
 from backend.master.service import MasterService
 from backend.storage.node_server import StorageNode
 
@@ -97,5 +97,42 @@ async def test_upload_and_download_roundtrip(tmp_path, monkeypatch):
         download_resp.raise_for_status()
         assert download_resp.content == file_bytes
 
-    await storage_server.stop(0)
+
+@pytest.mark.asyncio
+async def test_download_missing_replicas_returns_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("DFS_CHUNK_SIZE", "1024")
+    monkeypatch.setenv("DFS_REPLICATION", "1")
+
+    settings = Settings()
+    store = MetadataStore(settings)
+    master_service = MasterService(store=store, settings=settings)
+
+    master_server = grpc.aio.server()
+    pb2_grpc.add_MasterServiceServicer_to_server(MasterGrpc(master_service), master_server)
+    master_port = master_server.add_insecure_port("localhost:0")
+    await master_server.start()
+
+    monkeypatch.setenv("DFS_MASTER_HOST", "localhost")
+    monkeypatch.setenv("DFS_MASTER_PORT", str(master_port))
+
+    # Record file with placement but no replicas
+    store.put_file(
+        FileRecord(
+            file_id="file-missing",
+            file_name="missing.bin",
+            file_size=1,
+            chunk_size=1024,
+            placements=[ChunkPlacement(chunk_id="file-missing:0", chunk_index=0, replicas=[])],
+        )
+    )
+
+    async with AsyncExitStack() as stack:
+        transport = ASGITransport(app=app)
+        client = httpx.AsyncClient(transport=transport, base_url="http://test")
+        await stack.enter_async_context(client)
+
+        resp = await client.get("/download/file-missing")
+        assert resp.status_code == 502
+
+    await master_server.stop(0)
     await master_server.stop(0)

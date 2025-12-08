@@ -27,6 +27,24 @@ class MasterService:
     def heartbeat(self, node_id: str, free_bytes: int, load_factor: float) -> bool:
         return self.store.update_heartbeat(node_id, free_bytes, load_factor)
 
+    def plan_rebalances(self) -> list[tuple[str, str, str]]:
+        healthy = {n.node_id: n for n in self.store.list_healthy_nodes()}
+        instructions: list[tuple[str, str, str]] = []
+        for file in self.store._files.values():  # pylint: disable=protected-access
+            for placement in file.placements:
+                # keep only healthy replicas
+                healthy_replicas = [rid for rid in placement.replicas if rid in healthy]
+                if len(healthy_replicas) >= self.settings.replication_factor:
+                    continue
+                # choose a new target not already present
+                candidates = [nid for nid in healthy if nid not in placement.replicas]
+                if not candidates:
+                    continue
+                target = candidates[0]
+                source = placement.replicas[0] if placement.replicas else ""
+                instructions.append((placement.chunk_id, source, target))
+        return instructions
+
     def get_upload_plan(self, file_id: str, file_name: str, file_size: int, requested_chunk_size: Optional[int] = None) -> tuple[int, list[ChunkPlacement]]:
         if requested_chunk_size and requested_chunk_size > 0:
             self.settings.chunk_size = requested_chunk_size

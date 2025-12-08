@@ -38,7 +38,11 @@ class MasterGrpc(pb2_grpc.MasterServiceServicer):
             free_bytes=request.free_bytes,
             load_factor=request.load_factor,
         )
-        return pb2.HeartbeatResponse(ok=ok, rebalances=[])
+        rebalances = [
+            pb2.RebalanceInstruction(chunk_id=cid, source_node_id=src, target_node_id=dst)
+            for cid, src, dst in self.service.plan_rebalances()
+        ]
+        return pb2.HeartbeatResponse(ok=ok, rebalances=rebalances)
 
     async def GetUploadPlan(self, request, context):
         chunk_size, placements = self.service.get_upload_plan(
@@ -112,6 +116,24 @@ class MasterGrpc(pb2_grpc.MasterServiceServicer):
                 )
                 for p in record.placements
             ],
+        )
+
+    async def ListNodes(self, request, context):
+        nodes = self.service.store.list_all_nodes()
+        return pb2.ListNodesResponse(
+            nodes=[
+                pb2.NodeDescriptor(
+                    node_id=n.node_id,
+                    host=n.host,
+                    grpc_port=n.grpc_port,
+                    capacity_bytes=n.capacity_bytes,
+                    free_bytes=n.free_bytes,
+                    mac=n.mac,
+                    healthy=n.healthy,
+                    last_seen=n.last_seen,
+                )
+                for n in nodes
+            ]
         )
 
 

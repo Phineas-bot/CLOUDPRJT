@@ -105,3 +105,7 @@ class MetadataStore:
         now = time.time()
         with self._lock:
             return [n for n in self._nodes.values() if now - n.last_seen > self._settings.heartbeat_timeout]
+
+    def list_all_nodes(self) -> List[NodeState]:
+        with self._lock:
+            return list(self._nodes.values())

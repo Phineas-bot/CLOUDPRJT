@@ -11,6 +11,8 @@ message NodeDescriptor {
   int64 capacity_bytes = 4;
   int64 free_bytes = 5;
   string mac = 6;
+  bool healthy = 7;
+  double last_seen = 8;
 }
 
 message RegisterNodeRequest { NodeDescriptor node = 1; }
@@ -66,6 +68,9 @@ message FileMetadataResponse {
   repeated ChunkPlacement placements = 5;
 }
 
+message ListNodesRequest {}
+message ListNodesResponse { repeated NodeDescriptor nodes = 1; }
+
 message UploadChunkRequest {
   string file_id = 1;
   string chunk_id = 2;
@@ -93,6 +98,7 @@ service MasterService {
   rpc GetUploadPlan(UploadPlanRequest) returns (UploadPlanResponse);
   rpc ReportChunkStored(ReportChunkStoredRequest) returns (ReportChunkStoredResponse);
   rpc GetFileMetadata(FileMetadataRequest) returns (FileMetadataResponse);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
 }
 
 service StorageService {

@@ -59,6 +59,11 @@ class MasterServiceStub(object):
                 request_serializer=distributed__storage__pb2.FileMetadataRequest.SerializeToString,
                 response_deserializer=distributed__storage__pb2.FileMetadataResponse.FromString,
                 _registered_method=True)
+        self.ListNodes = channel.unary_unary(
+                '/dfs.MasterService/ListNodes',
+                request_serializer=distributed__storage__pb2.ListNodesRequest.SerializeToString,
+                response_deserializer=distributed__storage__pb2.ListNodesResponse.FromString,
+                _registered_method=True)
 
 
 class MasterServiceServicer(object):
@@ -94,6 +99,12 @@ class MasterServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListNodes(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_MasterServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -121,6 +132,11 @@ def add_MasterServiceServicer_to_server(servicer, server):
                     servicer.GetFileMetadata,
                     request_deserializer=distributed__storage__pb2.FileMetadataRequest.FromString,
                     response_serializer=distributed__storage__pb2.FileMetadataResponse.SerializeToString,
+            ),
+            'ListNodes': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListNodes,
+                    request_deserializer=distributed__storage__pb2.ListNodesRequest.FromString,
+                    response_serializer=distributed__storage__pb2.ListNodesResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -258,6 +274,33 @@ class MasterService(object):
             '/dfs.MasterService/GetFileMetadata',
             distributed__storage__pb2.FileMetadataRequest.SerializeToString,
             distributed__storage__pb2.FileMetadataResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListNodes(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfs.MasterService/ListNodes',
+            distributed__storage__pb2.ListNodesRequest.SerializeToString,
+            distributed__storage__pb2.ListNodesResponse.FromString,
             options,
             channel_credentials,
             insecure,
