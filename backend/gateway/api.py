@@ -73,6 +73,22 @@ async def list_nodes():
     ]
 
 
+@app.get("/admin/rebalances")
+async def pending_rebalances():
+    channel, stub = await _master_stub()
+    async with channel:
+        # trigger empty heartbeat to fetch pending instructions
+        resp = await stub.Heartbeat(pb2.HeartbeatRequest(node_id="", load_factor=0.0, free_bytes=0))
+    return [
+        {
+            "chunk_id": r.chunk_id,
+            "source_node_id": r.source_node_id,
+            "target_node_id": r.target_node_id,
+        }
+        for r in resp.rebalances
+    ]
+
+
 @app.post("/plan", response_model=UploadPlanResponse)
 async def get_plan(req: UploadPlanRequest):
     file_id = req.file_id or uuid.uuid4().hex

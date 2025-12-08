@@ -135,4 +135,58 @@ async def test_download_missing_replicas_returns_error(tmp_path, monkeypatch):
         assert resp.status_code == 502
 
     await master_server.stop(0)
+
+
+@pytest.mark.asyncio
+async def test_download_returns_502_when_replica_missing_chunk(tmp_path, monkeypatch):
+    monkeypatch.setenv("DFS_CHUNK_SIZE", "1024")
+    monkeypatch.setenv("DFS_REPLICATION", "1")
+
+    settings = Settings()
+    store = MetadataStore(settings)
+    master_service = MasterService(store=store, settings=settings)
+
+    master_server = grpc.aio.server()
+    pb2_grpc.add_MasterServiceServicer_to_server(MasterGrpc(master_service), master_server)
+    master_port = master_server.add_insecure_port("localhost:0")
+    await master_server.start()
+
+    monkeypatch.setenv("DFS_MASTER_HOST", "localhost")
+    monkeypatch.setenv("DFS_MASTER_PORT", str(master_port))
+
+    # Start storage server but do not store chunk
+    storage_node = StorageNode("node1", data_dir=tmp_path / "node1")
+    storage_server = grpc.aio.server()
+    pb2_grpc.add_StorageServiceServicer_to_server(StorageGrpc(storage_node), storage_server)
+    storage_port = storage_server.add_insecure_port("localhost:0")
+    await storage_server.start()
+
+    master_service.register_node(
+        node_id="node1",
+        host="localhost",
+        grpc_port=storage_port,
+        capacity_bytes=10_000,
+        free_bytes=9_000,
+        mac="",
+    )
+    # Record placement but chunk is absent on disk
+    store.put_file(
+        FileRecord(
+            file_id="file-empty",
+            file_name="missing.bin",
+            file_size=1,
+            chunk_size=1024,
+            placements=[ChunkPlacement(chunk_id="file-empty:0", chunk_index=0, replicas=["node1"])],
+        )
+    )
+
+    async with AsyncExitStack() as stack:
+        transport = ASGITransport(app=app)
+        client = httpx.AsyncClient(transport=transport, base_url="http://test")
+        await stack.enter_async_context(client)
+
+        resp = await client.get("/download/file-empty")
+        assert resp.status_code == 502
+
+    await storage_server.stop(0)
     await master_server.stop(0)
