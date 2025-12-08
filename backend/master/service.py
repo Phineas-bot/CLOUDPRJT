@@ -10,6 +10,8 @@ class MasterService:
     def __init__(self, store: Optional[MetadataStore] = None, settings: Optional[Settings] = None):
         self.settings = settings or load_settings()
         self.store = store or MetadataStore(self.settings)
+        # cache of pending rebalances computed by the background scheduler
+        self.pending_rebalances: list[tuple[str, str, str]] = []
 
     # Domain-level helpers (gRPC wiring happens in backend.grpc.master_server)
     def register_node(self, node_id: str, host: str, grpc_port: int, capacity_bytes: int, free_bytes: int, mac: str) -> bool:
@@ -44,6 +46,26 @@ class MasterService:
                 source = placement.replicas[0] if placement.replicas else ""
                 instructions.append((placement.chunk_id, source, target))
         return instructions
+
+    def refresh_rebalances(self) -> list[tuple[str, str, str]]:
+        """Recompute and store pending rebalances for later delivery."""
+        self.pending_rebalances = self.plan_rebalances()
+        return self.pending_rebalances
+
+    def list_rebalances(self) -> list[tuple[str, str, str]]:
+        return list(self.pending_rebalances)
+
+    def take_rebalances_for(self, node_id: str) -> list[tuple[str, str, str]]:
+        """Return and remove rebalances targeted at the given node."""
+        targeted: list[tuple[str, str, str]] = []
+        remaining: list[tuple[str, str, str]] = []
+        for chunk_id, source_node, target_node in self.pending_rebalances:
+            if target_node == node_id:
+                targeted.append((chunk_id, source_node, target_node))
+            else:
+                remaining.append((chunk_id, source_node, target_node))
+        self.pending_rebalances = remaining
+        return targeted
 
     def get_upload_plan(self, file_id: str, file_name: str, file_size: int, requested_chunk_size: Optional[int] = None) -> tuple[int, list[ChunkPlacement]]:
         if requested_chunk_size and requested_chunk_size > 0:

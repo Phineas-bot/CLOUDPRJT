@@ -77,8 +77,7 @@ async def list_nodes():
 async def pending_rebalances():
     channel, stub = await _master_stub()
     async with channel:
-        # trigger empty heartbeat to fetch pending instructions
-        resp = await stub.Heartbeat(pb2.HeartbeatRequest(node_id="", load_factor=0.0, free_bytes=0))
+        resp = await stub.ListRebalances(pb2.ListRebalancesRequest())
     return [
         {
             "chunk_id": r.chunk_id,
@@ -87,6 +86,21 @@ async def pending_rebalances():
         }
         for r in resp.rebalances
     ]
+
+
+@app.get("/admin/summary")
+async def admin_summary():
+    channel, stub = await _master_stub()
+    async with channel:
+        nodes_resp = await stub.ListNodes(pb2.ListNodesRequest())
+        rebalances_resp = await stub.ListRebalances(pb2.ListRebalancesRequest())
+
+    healthy_nodes = [n for n in nodes_resp.nodes if n.healthy]
+    return {
+        "node_count": len(nodes_resp.nodes),
+        "healthy_nodes": len(healthy_nodes),
+        "pending_rebalances": len(rebalances_resp.rebalances),
+    }
 
 
 @app.post("/plan", response_model=UploadPlanResponse)

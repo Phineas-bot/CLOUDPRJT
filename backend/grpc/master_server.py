@@ -33,14 +33,18 @@ class MasterGrpc(pb2_grpc.MasterServiceServicer):
         return pb2.RegisterNodeResponse(ok=ok, reason="")
 
     async def Heartbeat(self, request, context):
+        # Ensure pending instructions are up to date for interactive calls
+        if not self.service.pending_rebalances:
+            self.service.refresh_rebalances()
         ok = self.service.heartbeat(
             node_id=request.node_id,
             free_bytes=request.free_bytes,
             load_factor=request.load_factor,
         )
+        # deliver only instructions targeted for this node and consume them from the queue
         rebalances = [
             pb2.RebalanceInstruction(chunk_id=cid, source_node_id=src, target_node_id=dst)
-            for cid, src, dst in self.service.plan_rebalances()
+            for cid, src, dst in self.service.take_rebalances_for(request.node_id)
         ]
         return pb2.HeartbeatResponse(ok=ok, rebalances=rebalances)
 
@@ -136,6 +140,14 @@ class MasterGrpc(pb2_grpc.MasterServiceServicer):
             ]
         )
 
+    async def ListRebalances(self, request, context):
+        return pb2.ListRebalancesResponse(
+            rebalances=[
+                pb2.RebalanceInstruction(chunk_id=cid, source_node_id=src, target_node_id=dst)
+                for cid, src, dst in self.service.list_rebalances()
+            ]
+        )
+
 
 def _server_address() -> str:
     host = os.getenv("DFS_MASTER_HOST", "0.0.0.0")
@@ -155,6 +167,15 @@ async def _monitor_nodes(service: MasterService, interval: float) -> None:
         return
 
 
+async def _rebalance_scheduler(service: MasterService, interval: float) -> None:
+    try:
+        while True:
+            service.refresh_rebalances()
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:  # graceful shutdown
+        return
+
+
 async def serve() -> None:
     service = MasterService()
     server = grpc.aio.server()
@@ -165,14 +186,17 @@ async def serve() -> None:
     # Start housekeeping loop to mark overdue nodes unhealthy
     settings = load_settings()
     monitor_task = asyncio.create_task(_monitor_nodes(service, max(1.0, settings.heartbeat_timeout / 2)))
+    rebalance_task = asyncio.create_task(_rebalance_scheduler(service, max(1.0, settings.heartbeat_timeout / 2)))
 
     await server.start()
     try:
         await server.wait_for_termination()
     finally:
         monitor_task.cancel()
+        rebalance_task.cancel()
         with contextlib.suppress(Exception):
             await monitor_task
+            await rebalance_task
 
 
 if __name__ == "__main__":  # pragma: no cover

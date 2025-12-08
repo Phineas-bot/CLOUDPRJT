@@ -71,6 +71,9 @@ message FileMetadataResponse {
 message ListNodesRequest {}
 message ListNodesResponse { repeated NodeDescriptor nodes = 1; }
 
+message ListRebalancesRequest {}
+message ListRebalancesResponse { repeated RebalanceInstruction rebalances = 1; }
+
 message UploadChunkRequest {
   string file_id = 1;
   string chunk_id = 2;
@@ -99,6 +102,7 @@ service MasterService {
   rpc ReportChunkStored(ReportChunkStoredRequest) returns (ReportChunkStoredResponse);
   rpc GetFileMetadata(FileMetadataRequest) returns (FileMetadataResponse);
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  rpc ListRebalances(ListRebalancesRequest) returns (ListRebalancesResponse);
 }
 
 service StorageService {

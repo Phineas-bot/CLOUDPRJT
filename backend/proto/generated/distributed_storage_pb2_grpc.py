@@ -64,6 +64,11 @@ class MasterServiceStub(object):
                 request_serializer=distributed__storage__pb2.ListNodesRequest.SerializeToString,
                 response_deserializer=distributed__storage__pb2.ListNodesResponse.FromString,
                 _registered_method=True)
+        self.ListRebalances = channel.unary_unary(
+                '/dfs.MasterService/ListRebalances',
+                request_serializer=distributed__storage__pb2.ListRebalancesRequest.SerializeToString,
+                response_deserializer=distributed__storage__pb2.ListRebalancesResponse.FromString,
+                _registered_method=True)
 
 
 class MasterServiceServicer(object):
@@ -105,6 +110,12 @@ class MasterServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListRebalances(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_MasterServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -137,6 +148,11 @@ def add_MasterServiceServicer_to_server(servicer, server):
                     servicer.ListNodes,
                     request_deserializer=distributed__storage__pb2.ListNodesRequest.FromString,
                     response_serializer=distributed__storage__pb2.ListNodesResponse.SerializeToString,
+            ),
+            'ListRebalances': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListRebalances,
+                    request_deserializer=distributed__storage__pb2.ListRebalancesRequest.FromString,
+                    response_serializer=distributed__storage__pb2.ListRebalancesResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -301,6 +317,33 @@ class MasterService(object):
             '/dfs.MasterService/ListNodes',
             distributed__storage__pb2.ListNodesRequest.SerializeToString,
             distributed__storage__pb2.ListNodesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListRebalances(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfs.MasterService/ListRebalances',
+            distributed__storage__pb2.ListRebalancesRequest.SerializeToString,
+            distributed__storage__pb2.ListRebalancesResponse.FromString,
             options,
             channel_credentials,
             insecure,

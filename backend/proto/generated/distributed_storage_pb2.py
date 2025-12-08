@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19\x64istributed_storage.proto\x12\x03\x64\x66s\"\x9f\x01\n\x0eNodeDescriptor\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x0c\n\x04host\x18\x02 \x01(\t\x12\x11\n\tgrpc_port\x18\x03 \x01(\x05\x12\x16\n\x0e\x63\x61pacity_bytes\x18\x04 \x01(\x03\x12\x12\n\nfree_bytes\x18\x05 \x01(\x03\x12\x0b\n\x03mac\x18\x06 \x01(\t\x12\x0f\n\x07healthy\x18\x07 \x01(\x08\x12\x11\n\tlast_seen\x18\x08 \x01(\x01\"8\n\x13RegisterNodeRequest\x12!\n\x04node\x18\x01 \x01(\x0b\x32\x13.dfs.NodeDescriptor\"2\n\x14RegisterNodeResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\"L\n\x10HeartbeatRequest\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x13\n\x0bload_factor\x18\x02 \x01(\x01\x12\x12\n\nfree_bytes\x18\x03 \x01(\x03\"X\n\x14RebalanceInstruction\x12\x10\n\x08\x63hunk_id\x18\x01 \x01(\t\x12\x16\n\x0esource_node_id\x18\x02 \x01(\t\x12\x16\n\x0etarget_node_id\x18\x03 \x01(\t\"N\n\x11HeartbeatResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12-\n\nrebalances\x18\x02 \x03(\x0b\x32\x19.dfs.RebalanceInstruction\"^\n\x11UploadPlanRequest\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\x11\n\tfile_name\x18\x02 \x01(\t\x12\x11\n\tfile_size\x18\x03 \x01(\x03\x12\x12\n\nchunk_size\x18\x04 \x01(\x03\"^\n\x0e\x43hunkPlacement\x12\x10\n\x08\x63hunk_id\x18\x01 \x01(\t\x12\x13\n\x0b\x63hunk_index\x18\x02 \x01(\x05\x12%\n\x08replicas\x18\x03 \x03(\x0b\x32\x13.dfs.NodeDescriptor\"~\n\x12UploadPlanResponse\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\'\n\nplacements\x18\x02 \x03(\x0b\x32\x13.dfs.ChunkPlacement\x12\x12\n\nchunk_size\x18\x03 \x01(\x03\x12\x1a\n\x12replication_factor\x18\x04 \x01(\x05\"c\n\x18ReportChunkStoredRequest\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\t\x12\x13\n\x0b\x63hunk_index\x18\x03 \x01(\x05\x12\x0f\n\x07node_id\x18\x04 \x01(\t\"\'\n\x19ReportChunkStoredResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\"&\n\x13\x46ileMetadataRequest\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\"\x8a\x01\n\x14\x46ileMetadataResponse\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\x11\n\tfile_name\x18\x02 \x01(\t\x12\x11\n\tfile_size\x18\x03 \x01(\x03\x12\x12\n\nchunk_size\x18\x04 \x01(\x03\x12\'\n\nplacements\x18\x05 \x03(\x0b\x32\x13.dfs.ChunkPlacement\"\x12\n\x10ListNodesRequest\"7\n\x11ListNodesResponse\x12\"\n\x05nodes\x18\x01 \x03(\x0b\x32\x13.dfs.NodeDescriptor\"Z\n\x12UploadChunkRequest\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\t\x12\x13\n\x0b\x63hunk_index\x18\x03 \x01(\x05\x12\x0c\n\x04\x64\x61ta\x18\x04 \x01(\x0c\"1\n\x13UploadChunkResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\"(\n\x14\x44ownloadChunkRequest\x12\x10\n\x08\x63hunk_id\x18\x01 \x01(\t\"A\n\x15\x44ownloadChunkResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x0e\n\x06reason\x18\x03 \x01(\t\"&\n\x12\x44\x65leteChunkRequest\x12\x10\n\x08\x63hunk_id\x18\x01 \x01(\t\"1\n\x13\x44\x65leteChunkResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\"\x14\n\x12HealthCheckRequest\"1\n\x13HealthCheckResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06status\x18\x02 \x01(\t2\xaa\x03\n\rMasterService\x12\x43\n\x0cRegisterNode\x12\x18.dfs.RegisterNodeRequest\x1a\x19.dfs.RegisterNodeResponse\x12:\n\tHeartbeat\x12\x15.dfs.HeartbeatRequest\x1a\x16.dfs.HeartbeatResponse\x12@\n\rGetUploadPlan\x12\x16.dfs.UploadPlanRequest\x1a\x17.dfs.UploadPlanResponse\x12R\n\x11ReportChunkStored\x12\x1d.dfs.ReportChunkStoredRequest\x1a\x1e.dfs.ReportChunkStoredResponse\x12\x46\n\x0fGetFileMetadata\x12\x18.dfs.FileMetadataRequest\x1a\x19.dfs.FileMetadataResponse\x12:\n\tListNodes\x12\x15.dfs.ListNodesRequest\x1a\x16.dfs.ListNodesResponse2\x9e\x02\n\x0eStorageService\x12@\n\x0bUploadChunk\x12\x17.dfs.UploadChunkRequest\x1a\x18.dfs.UploadChunkResponse\x12\x46\n\rDownloadChunk\x12\x19.dfs.DownloadChunkRequest\x1a\x1a.dfs.DownloadChunkResponse\x12@\n\x0b\x44\x65leteChunk\x12\x17.dfs.DeleteChunkRequest\x1a\x18.dfs.DeleteChunkResponse\x12@\n\x0bHealthCheck\x12\x17.dfs.HealthCheckRequest\x1a\x18.dfs.HealthCheckResponseB\x05Z\x03\x64\x66sb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19\x64istributed_storage.proto\x12\x03\x64\x66s\"\x9f\x01\n\x0eNodeDescriptor\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x0c\n\x04host\x18\x02 \x01(\t\x12\x11\n\tgrpc_port\x18\x03 \x01(\x05\x12\x16\n\x0e\x63\x61pacity_bytes\x18\x04 \x01(\x03\x12\x12\n\nfree_bytes\x18\x05 \x01(\x03\x12\x0b\n\x03mac\x18\x06 \x01(\t\x12\x0f\n\x07healthy\x18\x07 \x01(\x08\x12\x11\n\tlast_seen\x18\x08 \x01(\x01\"8\n\x13RegisterNodeRequest\x12!\n\x04node\x18\x01 \x01(\x0b\x32\x13.dfs.NodeDescriptor\"2\n\x14RegisterNodeResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\"L\n\x10HeartbeatRequest\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x13\n\x0bload_factor\x18\x02 \x01(\x01\x12\x12\n\nfree_bytes\x18\x03 \x01(\x03\"X\n\x14RebalanceInstruction\x12\x10\n\x08\x63hunk_id\x18\x01 \x01(\t\x12\x16\n\x0esource_node_id\x18\x02 \x01(\t\x12\x16\n\x0etarget_node_id\x18\x03 \x01(\t\"N\n\x11HeartbeatResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12-\n\nrebalances\x18\x02 \x03(\x0b\x32\x19.dfs.RebalanceInstruction\"^\n\x11UploadPlanRequest\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\x11\n\tfile_name\x18\x02 \x01(\t\x12\x11\n\tfile_size\x18\x03 \x01(\x03\x12\x12\n\nchunk_size\x18\x04 \x01(\x03\"^\n\x0e\x43hunkPlacement\x12\x10\n\x08\x63hunk_id\x18\x01 \x01(\t\x12\x13\n\x0b\x63hunk_index\x18\x02 \x01(\x05\x12%\n\x08replicas\x18\x03 \x03(\x0b\x32\x13.dfs.NodeDescriptor\"~\n\x12UploadPlanResponse\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\'\n\nplacements\x18\x02 \x03(\x0b\x32\x13.dfs.ChunkPlacement\x12\x12\n\nchunk_size\x18\x03 \x01(\x03\x12\x1a\n\x12replication_factor\x18\x04 \x01(\x05\"c\n\x18ReportChunkStoredRequest\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\t\x12\x13\n\x0b\x63hunk_index\x18\x03 \x01(\x05\x12\x0f\n\x07node_id\x18\x04 \x01(\t\"\'\n\x19ReportChunkStoredResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\"&\n\x13\x46ileMetadataRequest\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\"\x8a\x01\n\x14\x46ileMetadataResponse\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\x11\n\tfile_name\x18\x02 \x01(\t\x12\x11\n\tfile_size\x18\x03 \x01(\x03\x12\x12\n\nchunk_size\x18\x04 \x01(\x03\x12\'\n\nplacements\x18\x05 \x03(\x0b\x32\x13.dfs.ChunkPlacement\"\x12\n\x10ListNodesRequest\"7\n\x11ListNodesResponse\x12\"\n\x05nodes\x18\x01 \x03(\x0b\x32\x13.dfs.NodeDescriptor\"\x17\n\x15ListRebalancesRequest\"G\n\x16ListRebalancesResponse\x12-\n\nrebalances\x18\x01 \x03(\x0b\x32\x19.dfs.RebalanceInstruction\"Z\n\x12UploadChunkRequest\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\t\x12\x13\n\x0b\x63hunk_index\x18\x03 \x01(\x05\x12\x0c\n\x04\x64\x61ta\x18\x04 \x01(\x0c\"1\n\x13UploadChunkResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\"(\n\x14\x44ownloadChunkRequest\x12\x10\n\x08\x63hunk_id\x18\x01 \x01(\t\"A\n\x15\x44ownloadChunkResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x0e\n\x06reason\x18\x03 \x01(\t\"&\n\x12\x44\x65leteChunkRequest\x12\x10\n\x08\x63hunk_id\x18\x01 \x01(\t\"1\n\x13\x44\x65leteChunkResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\"\x14\n\x12HealthCheckRequest\"1\n\x13HealthCheckResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06status\x18\x02 \x01(\t2\xf5\x03\n\rMasterService\x12\x43\n\x0cRegisterNode\x12\x18.dfs.RegisterNodeRequest\x1a\x19.dfs.RegisterNodeResponse\x12:\n\tHeartbeat\x12\x15.dfs.HeartbeatRequest\x1a\x16.dfs.HeartbeatResponse\x12@\n\rGetUploadPlan\x12\x16.dfs.UploadPlanRequest\x1a\x17.dfs.UploadPlanResponse\x12R\n\x11ReportChunkStored\x12\x1d.dfs.ReportChunkStoredRequest\x1a\x1e.dfs.ReportChunkStoredResponse\x12\x46\n\x0fGetFileMetadata\x12\x18.dfs.FileMetadataRequest\x1a\x19.dfs.FileMetadataResponse\x12:\n\tListNodes\x12\x15.dfs.ListNodesRequest\x1a\x16.dfs.ListNodesResponse\x12I\n\x0eListRebalances\x12\x1a.dfs.ListRebalancesRequest\x1a\x1b.dfs.ListRebalancesResponse2\x9e\x02\n\x0eStorageService\x12@\n\x0bUploadChunk\x12\x17.dfs.UploadChunkRequest\x1a\x18.dfs.UploadChunkResponse\x12\x46\n\rDownloadChunk\x12\x19.dfs.DownloadChunkRequest\x1a\x1a.dfs.DownloadChunkResponse\x12@\n\x0b\x44\x65leteChunk\x12\x17.dfs.DeleteChunkRequest\x1a\x18.dfs.DeleteChunkResponse\x12@\n\x0bHealthCheck\x12\x17.dfs.HealthCheckRequest\x1a\x18.dfs.HealthCheckResponseB\x05Z\x03\x64\x66sb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -62,24 +62,28 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_LISTNODESREQUEST']._serialized_end=1215
   _globals['_LISTNODESRESPONSE']._serialized_start=1217
   _globals['_LISTNODESRESPONSE']._serialized_end=1272
-  _globals['_UPLOADCHUNKREQUEST']._serialized_start=1274
-  _globals['_UPLOADCHUNKREQUEST']._serialized_end=1364
-  _globals['_UPLOADCHUNKRESPONSE']._serialized_start=1366
-  _globals['_UPLOADCHUNKRESPONSE']._serialized_end=1415
-  _globals['_DOWNLOADCHUNKREQUEST']._serialized_start=1417
-  _globals['_DOWNLOADCHUNKREQUEST']._serialized_end=1457
-  _globals['_DOWNLOADCHUNKRESPONSE']._serialized_start=1459
-  _globals['_DOWNLOADCHUNKRESPONSE']._serialized_end=1524
-  _globals['_DELETECHUNKREQUEST']._serialized_start=1526
-  _globals['_DELETECHUNKREQUEST']._serialized_end=1564
-  _globals['_DELETECHUNKRESPONSE']._serialized_start=1566
-  _globals['_DELETECHUNKRESPONSE']._serialized_end=1615
-  _globals['_HEALTHCHECKREQUEST']._serialized_start=1617
-  _globals['_HEALTHCHECKREQUEST']._serialized_end=1637
-  _globals['_HEALTHCHECKRESPONSE']._serialized_start=1639
-  _globals['_HEALTHCHECKRESPONSE']._serialized_end=1688
-  _globals['_MASTERSERVICE']._serialized_start=1691
-  _globals['_MASTERSERVICE']._serialized_end=2117
-  _globals['_STORAGESERVICE']._serialized_start=2120
-  _globals['_STORAGESERVICE']._serialized_end=2406
+  _globals['_LISTREBALANCESREQUEST']._serialized_start=1274
+  _globals['_LISTREBALANCESREQUEST']._serialized_end=1297
+  _globals['_LISTREBALANCESRESPONSE']._serialized_start=1299
+  _globals['_LISTREBALANCESRESPONSE']._serialized_end=1370
+  _globals['_UPLOADCHUNKREQUEST']._serialized_start=1372
+  _globals['_UPLOADCHUNKREQUEST']._serialized_end=1462
+  _globals['_UPLOADCHUNKRESPONSE']._serialized_start=1464
+  _globals['_UPLOADCHUNKRESPONSE']._serialized_end=1513
+  _globals['_DOWNLOADCHUNKREQUEST']._serialized_start=1515
+  _globals['_DOWNLOADCHUNKREQUEST']._serialized_end=1555
+  _globals['_DOWNLOADCHUNKRESPONSE']._serialized_start=1557
+  _globals['_DOWNLOADCHUNKRESPONSE']._serialized_end=1622
+  _globals['_DELETECHUNKREQUEST']._serialized_start=1624
+  _globals['_DELETECHUNKREQUEST']._serialized_end=1662
+  _globals['_DELETECHUNKRESPONSE']._serialized_start=1664
+  _globals['_DELETECHUNKRESPONSE']._serialized_end=1713
+  _globals['_HEALTHCHECKREQUEST']._serialized_start=1715
+  _globals['_HEALTHCHECKREQUEST']._serialized_end=1735
+  _globals['_HEALTHCHECKRESPONSE']._serialized_start=1737
+  _globals['_HEALTHCHECKRESPONSE']._serialized_end=1786
+  _globals['_MASTERSERVICE']._serialized_start=1789
+  _globals['_MASTERSERVICE']._serialized_end=2290
+  _globals['_STORAGESERVICE']._serialized_start=2293
+  _globals['_STORAGESERVICE']._serialized_end=2579
 # @@protoc_insertion_point(module_scope)

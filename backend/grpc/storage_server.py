@@ -74,36 +74,42 @@ async def heartbeat_loop(node: StorageNode, stub: pb2_grpc.MasterServiceStub, no
 
 
 async def replicate_chunk(node: StorageNode, instr: pb2.RebalanceInstruction, master_stub: pb2_grpc.MasterServiceStub) -> None:
-    # Ask master for metadata to locate source host/port
-    meta = await master_stub.GetFileMetadata(pb2.FileMetadataRequest(file_id=instr.chunk_id.split(":")[0]))
-    placement = next((p for p in meta.placements if p.chunk_id == instr.chunk_id), None)
-    if not placement:
-        logging.warning("No placement metadata for chunk %s", instr.chunk_id)
-        return
-    source = next((r for r in placement.replicas if r.node_id == instr.source_node_id), None)
-    if not source or not source.host or not source.grpc_port:
-        logging.warning("Source node %s missing host/port", instr.source_node_id)
-        return
+    try:
+        # Ask master for metadata to locate source host/port
+        meta = await master_stub.GetFileMetadata(pb2.FileMetadataRequest(file_id=instr.chunk_id.split(":")[0]))
+        placement = next((p for p in meta.placements if p.chunk_id == instr.chunk_id), None)
+        if not placement:
+            logging.warning("rebalance: no placement metadata for chunk %s", instr.chunk_id)
+            return
+        source = next((r for r in placement.replicas if r.node_id == instr.source_node_id), None)
+        if not source or not source.host or not source.grpc_port:
+            logging.warning("rebalance: source node %s missing host/port", instr.source_node_id)
+            return
 
-    # Download chunk from source
-    channel, stub = await _storage_stub(source.host, source.grpc_port)
-    async with channel:
-        resp = await stub.DownloadChunk(pb2.DownloadChunkRequest(chunk_id=instr.chunk_id))
-    if not resp.ok:
-        logging.warning("Failed to pull chunk %s from %s", instr.chunk_id, instr.source_node_id)
-        return
+        # Download chunk from source
+        channel, stub = await _storage_stub(source.host, source.grpc_port)
+        async with channel:
+            resp = await stub.DownloadChunk(pb2.DownloadChunkRequest(chunk_id=instr.chunk_id))
+        if not resp.ok:
+            logging.warning(
+                "rebalance: failed to pull chunk %s from %s reason=%s", instr.chunk_id, instr.source_node_id, resp.reason
+            )
+            return
 
-    file_id, idx = node.parse_chunk_id(instr.chunk_id)
-    node.save_chunk(file_id, idx, resp.data)
-    # Inform master we stored it
-    await master_stub.ReportChunkStored(
-        pb2.ReportChunkStoredRequest(
-            file_id=file_id,
-            chunk_id=instr.chunk_id,
-            chunk_index=idx,
-            node_id=instr.target_node_id,
+        file_id, idx = node.parse_chunk_id(instr.chunk_id)
+        node.save_chunk(file_id, idx, resp.data)
+        # Inform master we stored it
+        await master_stub.ReportChunkStored(
+            pb2.ReportChunkStoredRequest(
+                file_id=file_id,
+                chunk_id=instr.chunk_id,
+                chunk_index=idx,
+                node_id=instr.target_node_id,
+            )
         )
-    )
+        logging.info("rebalance: chunk %s replicated to %s", instr.chunk_id, instr.target_node_id)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logging.warning("rebalance: failed to replicate %s to %s: %s", instr.chunk_id, instr.target_node_id, exc)
 
 
 async def serve(args: Optional[argparse.Namespace] = None) -> None:
