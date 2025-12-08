@@ -13,6 +13,7 @@ message NodeDescriptor {
   string mac = 6;
   bool healthy = 7;
   double last_seen = 8;
+  double load_factor = 9;
 }
 
 message RegisterNodeRequest { NodeDescriptor node = 1; }
@@ -74,6 +75,19 @@ message ListNodesResponse { repeated NodeDescriptor nodes = 1; }
 message ListRebalancesRequest {}
 message ListRebalancesResponse { repeated RebalanceInstruction rebalances = 1; }
 
+message NodeActionRequest { string node_id = 1; }
+message NodeActionResponse { bool ok = 1; string reason = 2; }
+
+message ListFilesRequest {}
+message FileSummary {
+  string file_id = 1;
+  string file_name = 2;
+  int64 file_size = 3;
+  int64 chunk_size = 4;
+  int32 chunk_count = 5;
+}
+message ListFilesResponse { repeated FileSummary files = 1; }
+
 message UploadChunkRequest {
   string file_id = 1;
   string chunk_id = 2;
@@ -103,6 +117,10 @@ service MasterService {
   rpc GetFileMetadata(FileMetadataRequest) returns (FileMetadataResponse);
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
   rpc ListRebalances(ListRebalancesRequest) returns (ListRebalancesResponse);
+  rpc FailNode(NodeActionRequest) returns (NodeActionResponse);
+  rpc RestoreNode(NodeActionRequest) returns (NodeActionResponse);
+  rpc DeleteNode(NodeActionRequest) returns (NodeActionResponse);
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
 }
 
 service StorageService {

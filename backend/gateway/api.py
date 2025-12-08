@@ -19,6 +19,9 @@ except ImportError as exc:  # pragma: no cover
     raise RuntimeError("Run scripts/gen_protos.ps1 to generate gRPC stubs") from exc
 
 from backend.common import metrics
+from backend.gateway.node_manager import NodeManagerError, node_manager
+
+ONE_GB = 1024 * 1024 * 1024
 
 app = FastAPI(title="Distributed Storage Gateway", version="0.1.0")
 app.add_middleware(
@@ -62,6 +65,16 @@ class ChunkUploadResponse(BaseModel):
     reason: Optional[str] = None
 
 
+class NodeRegisterRequest(BaseModel):
+    node_id: str
+    host: str
+    grpc_port: int
+
+
+class NodeActionBody(BaseModel):
+    node_id: str
+
+
 def _master_target() -> str:
     host = os.getenv("DFS_MASTER_HOST", "localhost")
     port = int(os.getenv("DFS_MASTER_PORT", "50050"))
@@ -84,6 +97,16 @@ def _admin_token_valid(request: Request) -> bool:
     if not expected:
         return True
     return request.headers.get("x-api-key") == expected
+
+
+async def _node_action(method: str, node_id: str) -> dict:
+    channel, stub = await _master_stub()
+    async with channel:
+        rpc = getattr(stub, method)
+        resp = await rpc(pb2.NodeActionRequest(node_id=node_id))
+    if not resp.ok:
+        raise HTTPException(status_code=400, detail=resp.reason or "node action failed")
+    return {"ok": True}
 
 
 @app.get("/health")
@@ -126,6 +149,8 @@ async def list_nodes(request: Request):
             "free_bytes": n.free_bytes,
             "healthy": n.healthy,
             "last_seen": n.last_seen,
+            "mac": n.mac,
+            "load_factor": n.load_factor,
         }
         for n in reply.nodes
     ]
@@ -149,33 +174,44 @@ async def pending_rebalances(request: Request):
 
 
 @app.post("/admin/nodes/fail")
-async def fail_node(request: Request, node_id: str = Form(...)):
+async def fail_node(request: Request, payload: NodeActionBody):
     if not _admin_token_valid(request):
         raise HTTPException(status_code=401, detail="unauthorized")
-    # Placeholder until master exposes a direct admin RPC
-    raise HTTPException(status_code=501, detail="Fail node not yet implemented in master API")
+    if node_manager.is_managed(payload.node_id):
+        await node_manager.stop(payload.node_id, remove=False)
+    return await _node_action("FailNode", payload.node_id)
+
+
+@app.post("/admin/nodes/restore")
+async def restore_node(request: Request, payload: NodeActionBody):
+    if not _admin_token_valid(request):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if node_manager.is_managed(payload.node_id):
+        try:
+            await node_manager.restart(payload.node_id)
+        except NodeManagerError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return await _node_action("RestoreNode", payload.node_id)
+
+
+@app.delete("/admin/nodes/{node_id}")
+async def delete_node(request: Request, node_id: str):
+    if not _admin_token_valid(request):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if node_manager.is_managed(node_id):
+        await node_manager.stop(node_id, remove=True)
+    await _node_action("DeleteNode", node_id)
+    return Response(status_code=204)
 
 
 @app.post("/admin/nodes/register")
-async def register_node(request: Request, node_id: str = Form(...), host: str = Form(...), grpc_port: int = Form(...)):
+async def register_node(request: Request, payload: NodeRegisterRequest):
     if not _admin_token_valid(request):
         raise HTTPException(status_code=401, detail="unauthorized")
-    channel, stub = await _master_stub()
-    async with channel:
-        resp = await stub.RegisterNode(
-            pb2.RegisterNodeRequest(
-                node=pb2.NodeDescriptor(
-                    node_id=node_id,
-                    host=host,
-                    grpc_port=grpc_port,
-                    capacity_bytes=0,
-                    free_bytes=0,
-                    mac="",
-                )
-            )
-        )
-    if not resp.ok:
-        raise HTTPException(status_code=400, detail=resp.reason or "register failed")
+    try:
+        await node_manager.provision(payload.node_id, payload.host, payload.grpc_port, ONE_GB)
+    except NodeManagerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -187,13 +223,39 @@ async def admin_summary(request: Request):
     async with channel:
         nodes_resp = await stub.ListNodes(pb2.ListNodesRequest())
         rebalances_resp = await stub.ListRebalances(pb2.ListRebalancesRequest())
+        files_resp = await stub.ListFiles(pb2.ListFilesRequest())
 
     healthy_nodes = [n for n in nodes_resp.nodes if n.healthy]
+    total_files = len(files_resp.files)
+    total_chunks = sum(f.chunk_count for f in files_resp.files)
+    total_bytes = sum(f.file_size for f in files_resp.files)
     return {
         "node_count": len(nodes_resp.nodes),
         "healthy_nodes": len(healthy_nodes),
         "pending_rebalances": len(rebalances_resp.rebalances),
+        "total_files": total_files,
+        "total_chunks": total_chunks,
+        "data_footprint_bytes": total_bytes,
     }
+
+
+@app.get("/admin/files")
+async def list_files(request: Request):
+    if not _admin_token_valid(request):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    channel, stub = await _master_stub()
+    async with channel:
+        resp = await stub.ListFiles(pb2.ListFilesRequest())
+    return [
+        {
+            "file_id": f.file_id,
+            "file_name": f.file_name,
+            "file_size": f.file_size,
+            "chunk_size": f.chunk_size,
+            "chunk_count": f.chunk_count,
+        }
+        for f in resp.files
+    ]
 
 
 @app.post("/plan", response_model=UploadPlanResponse)

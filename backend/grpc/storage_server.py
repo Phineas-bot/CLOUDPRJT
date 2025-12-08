@@ -46,6 +46,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", default=os.getenv("DATA_DIR", "data/node1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "50051")))
     parser.add_argument("--host", default=os.getenv("HOST", "0.0.0.0"))
+    parser.add_argument("--capacity-bytes", type=int, default=int(os.getenv("NODE_CAPACITY_BYTES", "0")))
     return parser.parse_args()
 
 
@@ -120,7 +121,7 @@ async def replicate_chunk(node: StorageNode, instr: pb2.RebalanceInstruction, ma
 
 async def serve(args: Optional[argparse.Namespace] = None) -> None:
     args = args or _parse_args()
-    node = StorageNode(args.node_id, args.data_dir)
+    node = StorageNode(args.node_id, args.data_dir, capacity_bytes=args.capacity_bytes or None)
     server = grpc.aio.server()
     pb2_grpc.add_StorageServiceServicer_to_server(StorageGrpc(node), server)
     server.add_insecure_port(_address(args.host, args.port))

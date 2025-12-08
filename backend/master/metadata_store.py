@@ -75,6 +75,29 @@ class MetadataStore:
                 node.healthy = False
                 self._persist_db_locked()
 
+    def set_health(self, node_id: str, healthy: bool) -> bool:
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if not node:
+                return False
+            node.healthy = healthy
+            if healthy:
+                node.last_seen = time.time()
+            self._persist_db_locked()
+            return True
+
+    def delete_node(self, node_id: str) -> bool:
+        with self._lock:
+            if node_id not in self._nodes:
+                return False
+            del self._nodes[node_id]
+            for record in self._files.values():
+                for placement in record.placements:
+                    if node_id in placement.replicas:
+                        placement.replicas = [rid for rid in placement.replicas if rid != node_id]
+            self._persist_db_locked()
+            return True
+
     def get_node(self, node_id: str) -> Optional[NodeState]:
         with self._lock:
             return self._nodes.get(node_id)
@@ -123,6 +146,10 @@ class MetadataStore:
     def list_all_nodes(self) -> List[NodeState]:
         with self._lock:
             return list(self._nodes.values())
+
+    def list_files(self) -> List[FileRecord]:
+        with self._lock:
+            return list(self._files.values())
 
     # Persistence helpers
     def _init_db(self) -> None:

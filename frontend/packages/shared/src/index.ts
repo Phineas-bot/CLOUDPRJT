@@ -6,6 +6,8 @@ export type NodeDescriptor = {
   free_bytes: number;
   healthy: boolean;
   last_seen: number;
+  mac?: string;
+  load_factor?: number;
 };
 
 export type RebalanceInstruction = {
@@ -24,8 +26,17 @@ export type AdminSummary = {
   total_files?: number;
   active_transfers?: number;
   data_footprint?: string;
+  data_footprint_bytes?: number;
   storage_utilization?: number;
   unhealthy_nodes?: number;
+};
+
+export type FileRecordSummary = {
+  file_id: string;
+  file_name: string;
+  file_size: number;
+  chunk_size: number;
+  chunk_count: number;
 };
 
 export type UploadPlan = {

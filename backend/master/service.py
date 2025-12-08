@@ -1,5 +1,5 @@
 import time
-from typing import Optional
+from typing import List, Optional
 
 from backend.common import metrics
 from backend.common.config import Settings, load_settings
@@ -133,3 +133,15 @@ class MasterService:
 
     def get_file_metadata(self, file_id: str) -> Optional[FileRecord]:
         return self.store.get_file(file_id)
+
+    def fail_node(self, node_id: str) -> bool:
+        return self.store.set_health(node_id, False)
+
+    def restore_node(self, node_id: str) -> bool:
+        return self.store.set_health(node_id, True)
+
+    def delete_node(self, node_id: str) -> bool:
+        return self.store.delete_node(node_id)
+
+    def list_files(self) -> List[FileRecord]:
+        return self.store.list_files()
