@@ -1,6 +1,7 @@
 import time
 from typing import Optional
 
+from backend.common import metrics
 from backend.common.config import Settings, load_settings
 from backend.master import placement
 from backend.master.metadata_store import ChunkPlacement, FileRecord, MetadataStore, NodeState
@@ -33,23 +34,36 @@ class MasterService:
         healthy = {n.node_id: n for n in self.store.list_healthy_nodes()}
         instructions: list[tuple[str, str, str]] = []
         for file in self.store._files.values():  # pylint: disable=protected-access
+            chunk_bytes = file.chunk_size or self.settings.chunk_size
             for placement in file.placements:
                 # keep only healthy replicas
                 healthy_replicas = [rid for rid in placement.replicas if rid in healthy]
-                if len(healthy_replicas) >= self.settings.replication_factor:
+                deficit = self.settings.replication_factor - len(healthy_replicas)
+                if deficit <= 0:
                     continue
-                # choose a new target not already present
-                candidates = [nid for nid in healthy if nid not in placement.replicas]
-                if not candidates:
-                    continue
-                target = candidates[0]
-                source = placement.replicas[0] if placement.replicas else ""
-                instructions.append((placement.chunk_id, source, target))
+
+                # candidate targets: healthy nodes not already holding the chunk with enough free space
+                candidate_targets = [
+                    n for n in healthy.values() if n.node_id not in placement.replicas and n.free_bytes >= chunk_bytes
+                ]
+                candidate_targets.sort(key=lambda n: (n.free_bytes, n.capacity_bytes), reverse=True)
+
+                # choose a source replica with the most free space (bias toward healthier hosts)
+                source_candidates = sorted(
+                    (healthy[rid] for rid in healthy_replicas), key=lambda n: (n.free_bytes, n.capacity_bytes), reverse=True
+                )
+                # Prefer healthy source with most free space; fallback to the first recorded replica even if now unhealthy
+                source_node_id = source_candidates[0].node_id if source_candidates else (placement.replicas[0] if placement.replicas else "")
+
+                for target in candidate_targets[:deficit]:
+                    instructions.append((placement.chunk_id, source_node_id, target.node_id))
         return instructions
 
     def refresh_rebalances(self) -> list[tuple[str, str, str]]:
         """Recompute and store pending rebalances for later delivery."""
         self.pending_rebalances = self.plan_rebalances()
+        if self.pending_rebalances:
+            metrics.REBALANCE_PLANNED.inc(len(self.pending_rebalances))
         return self.pending_rebalances
 
     def list_rebalances(self) -> list[tuple[str, str, str]]:
@@ -65,6 +79,8 @@ class MasterService:
             else:
                 remaining.append((chunk_id, source_node, target_node))
         self.pending_rebalances = remaining
+        if targeted:
+            metrics.REBALANCE_DELIVERED.inc(len(targeted))
         return targeted
 
     def get_upload_plan(self, file_id: str, file_name: str, file_size: int, requested_chunk_size: Optional[int] = None) -> tuple[int, list[ChunkPlacement]]:

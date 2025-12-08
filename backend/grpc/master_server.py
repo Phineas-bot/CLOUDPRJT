@@ -7,6 +7,7 @@ from typing import Optional
 
 import grpc
 
+from backend.common import metrics
 from backend.common.config import load_settings
 from backend.master.service import MasterService
 
@@ -187,6 +188,7 @@ async def serve() -> None:
     settings = load_settings()
     monitor_task = asyncio.create_task(_monitor_nodes(service, max(1.0, settings.heartbeat_timeout / 2)))
     rebalance_task = asyncio.create_task(_rebalance_scheduler(service, max(1.0, settings.heartbeat_timeout / 2)))
+    metrics.maybe_start_metrics_server(int(os.getenv("DFS_METRICS_PORT", "0")) or None)
 
     await server.start()
     try:

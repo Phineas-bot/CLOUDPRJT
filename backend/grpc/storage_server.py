@@ -6,6 +6,7 @@ from typing import Optional
 
 import grpc
 
+from backend.common import metrics
 from backend.storage.node_server import StorageNode
 
 try:
@@ -80,10 +81,12 @@ async def replicate_chunk(node: StorageNode, instr: pb2.RebalanceInstruction, ma
         placement = next((p for p in meta.placements if p.chunk_id == instr.chunk_id), None)
         if not placement:
             logging.warning("rebalance: no placement metadata for chunk %s", instr.chunk_id)
+            metrics.REBALANCE_FAILED.inc()
             return
         source = next((r for r in placement.replicas if r.node_id == instr.source_node_id), None)
         if not source or not source.host or not source.grpc_port:
             logging.warning("rebalance: source node %s missing host/port", instr.source_node_id)
+            metrics.REBALANCE_FAILED.inc()
             return
 
         # Download chunk from source
@@ -94,6 +97,7 @@ async def replicate_chunk(node: StorageNode, instr: pb2.RebalanceInstruction, ma
             logging.warning(
                 "rebalance: failed to pull chunk %s from %s reason=%s", instr.chunk_id, instr.source_node_id, resp.reason
             )
+            metrics.REBALANCE_FAILED.inc()
             return
 
         file_id, idx = node.parse_chunk_id(instr.chunk_id)
@@ -108,8 +112,10 @@ async def replicate_chunk(node: StorageNode, instr: pb2.RebalanceInstruction, ma
             )
         )
         logging.info("rebalance: chunk %s replicated to %s", instr.chunk_id, instr.target_node_id)
+        metrics.REBALANCE_SUCCEEDED.inc()
     except Exception as exc:  # pragma: no cover - defensive logging
         logging.warning("rebalance: failed to replicate %s to %s: %s", instr.chunk_id, instr.target_node_id, exc)
+        metrics.REBALANCE_FAILED.inc()
 
 
 async def serve(args: Optional[argparse.Namespace] = None) -> None:
@@ -149,6 +155,7 @@ async def serve(args: Optional[argparse.Namespace] = None) -> None:
     hb_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
     hb_stub = pb2_grpc.MasterServiceStub(hb_channel)
     interval = int(os.getenv("DFS_HEARTBEAT_INTERVAL", "5"))
+    metrics.maybe_start_metrics_server(int(os.getenv("DFS_STORAGE_METRICS_PORT", "0")) or None)
     task = asyncio.create_task(heartbeat_loop(node, hb_stub, args.node_id, interval))
 
     await server.start()
