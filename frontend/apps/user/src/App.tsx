@@ -1,8 +1,23 @@
 type Tab = 'drive' | 'recent' | 'favorites' | 'trash' | 'search';
-import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { UploadPlan, UploadChunkResponse, StoredUpload, formatBytes } from '@shared/index';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  UploadPlan,
+  UploadChunkResponse,
+  StoredUpload,
+  formatBytes,
+  AuthSession,
+  PendingChallenge,
+  OtpChannel,
+  login as requestLogin,
+  resendOtp,
+  verifyOtp,
+  saveSession,
+  loadSession,
+  fetchMe,
+} from '@shared/index';
 
 const UPLOADS_KEY = 'dfs_user_uploads';
+const SESSION_KEY = 'dfs_user_session';
 const MB = 1024 * 1024;
 const BASE_URL = import.meta.env.VITE_GATEWAY_URL ?? 'http://localhost:8000';
 
@@ -59,6 +74,40 @@ const App: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [pendingChunkSize, setPendingChunkSize] = useState<number | null>(null);
+  const [session, setSession] = useState<AuthSession | null>(() => loadSession(SESSION_KEY));
+  const [pendingChallenge, setPendingChallenge] = useState<PendingChallenge | null>(null);
+  const [loginForm, setLoginForm] = useState({ email: '', password: '', channel: 'email' as OtpChannel });
+  const [otpCode, setOtpCode] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authStatus, setAuthStatus] = useState('Sign in to continue');
+  const [authBusy, setAuthBusy] = useState(false);
+
+  useEffect(() => {
+    if (!session) {
+      setAuthStatus('Sign in to continue');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const user = await fetchMe(BASE_URL, session.token);
+        if (cancelled) return;
+        const refreshed = { ...session, user } as AuthSession;
+        setSession(refreshed);
+        saveSession(SESSION_KEY, refreshed);
+        setAuthStatus(`Signed in as ${user.email}`);
+      } catch (err) {
+        if (cancelled) return;
+        saveSession(SESSION_KEY, null);
+        setSession(null);
+        resetAuthFlow();
+        setAuthError('Session expired. Please sign in again.');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.token]);
 
   const nonTrashedUploads = useMemo(() => uploads.filter((u) => !u.trashed), [uploads]);
   const favoritesCount = useMemo(() => uploads.filter((u) => u.favorite && !u.trashed).length, [uploads]);
@@ -132,12 +181,83 @@ const App: React.FC = () => {
     setPendingChunkSize(file ? determineChunkSize(file.size) : null);
   };
 
+  const resetAuthFlow = () => {
+    setPendingChallenge(null);
+    setOtpCode('');
+    setAuthError(null);
+    setAuthStatus('Sign in to continue');
+  };
+
+  const handleLogout = () => {
+    saveSession(SESSION_KEY, null);
+    setSession(null);
+    resetAuthFlow();
+    setAuthStatus('Sign in to continue');
+  };
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const resp = await requestLogin(BASE_URL, loginForm);
+      setPendingChallenge(resp);
+      setAuthStatus(`OTP sent via ${resp.channels.join(', ')}`);
+      setOtpCode('');
+    } catch (err: any) {
+      setAuthError(err.message || 'Login failed');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleOtpVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingChallenge) return;
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const freshSession = await verifyOtp(BASE_URL, {
+        pending_token: pendingChallenge.pending_token,
+        code: otpCode.trim(),
+      });
+      setSession(freshSession);
+      saveSession(SESSION_KEY, freshSession);
+      resetAuthFlow();
+      setAuthStatus(`Signed in as ${freshSession.user.email}`);
+    } catch (err: any) {
+      setAuthError(err.message || 'Invalid code');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (!pendingChallenge) return;
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const resp = await resendOtp(BASE_URL, { pending_token: pendingChallenge.pending_token });
+      setPendingChallenge(resp);
+      setAuthStatus(`New code sent (${resp.channels.join(', ')})`);
+    } catch (err: any) {
+      setAuthError(err.message || 'Resend failed');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
   const handleUpload = useCallback(async () => {
+    if (!session) {
+      setStatus('Sign in to upload');
+      return;
+    }
     const file = fileInputRef.current?.files?.[0];
     if (!file) {
       setStatus('Select a file first');
       return;
     }
+    const authHeaders = { Authorization: `Bearer ${session.token}` };
     const chunkSizeBytes = determineChunkSize(file.size);
     setPendingChunkSize(chunkSizeBytes);
     setIsUploading(true);
@@ -147,7 +267,7 @@ const App: React.FC = () => {
     try {
       const planResp = await fetch(`${BASE_URL}/plan`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({ file_name: file.name, file_size: file.size, chunk_size: chunkSizeBytes }),
       });
       if (!planResp.ok) throw new Error(`/plan -> ${planResp.status}`);
@@ -174,6 +294,7 @@ const App: React.FC = () => {
 
           const uploadResp = await fetch(`${BASE_URL}/upload/chunk`, {
             method: 'POST',
+            headers: authHeaders,
             body: form,
           });
           if (!uploadResp.ok) throw new Error(`/upload/chunk -> ${uploadResp.status}`);
@@ -204,7 +325,7 @@ const App: React.FC = () => {
     } finally {
       setIsUploading(false);
     }
-  }, [appendLog, upsertUpload]);
+  }, [appendLog, upsertUpload, session]);
 
   const resolveDownloadTarget = (query: string): StoredUpload | undefined => {
     const trimmed = query.trim();
@@ -220,6 +341,10 @@ const App: React.FC = () => {
 
   const handleDownload = useCallback(
     async (fromRow?: StoredUpload) => {
+      if (!session) {
+        setStatus('Sign in to download');
+        return;
+      }
       const candidate = fromRow || resolveDownloadTarget(downloadQuery);
       if (!candidate) {
         setStatus('Enter a valid file name or id');
@@ -229,7 +354,9 @@ const App: React.FC = () => {
       setIsDownloading(true);
       setStatus('Downloading...');
       try {
-        const resp = await fetch(`${BASE_URL}/download/${candidate.file_id}`);
+        const resp = await fetch(`${BASE_URL}/download/${candidate.file_id}`, {
+          headers: { Authorization: `Bearer ${session.token}` },
+        });
         if (!resp.ok) throw new Error(`/download -> ${resp.status}`);
         const blob = await resp.blob();
         const url = URL.createObjectURL(blob);
@@ -249,10 +376,92 @@ const App: React.FC = () => {
         setIsDownloading(false);
       }
     },
-    [downloadQuery, uploads]
+    [downloadQuery, uploads, session]
   );
 
   const chunkSizeLabel = pendingChunkSize ? `${(pendingChunkSize / MB).toFixed(0)} MB auto` : 'auto based on file size';
+
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-[radial-gradient(circle_at_20%_20%,rgba(34,211,238,0.08),transparent_35%),radial-gradient(circle_at_80%_0%,rgba(251,191,36,0.08),transparent_40%),#070d1b] text-slate-100 flex items-center justify-center p-6">
+        <div className="w-full max-w-md space-y-6 bg-slate-950/70 border border-slate-800 rounded-2xl p-6">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Phineas Cloud</p>
+            <h1 className="text-3xl font-bold">Secure sign in</h1>
+            <p className="text-sm text-slate-400">{authStatus}</p>
+          </div>
+          {!pendingChallenge && (
+            <form className="space-y-4" onSubmit={handleLoginSubmit}>
+              <div className="space-y-1">
+                <label className="text-sm text-slate-300">Email</label>
+                <input
+                  className="input"
+                  type="email"
+                  value={loginForm.email}
+                  onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm text-slate-300">Password</label>
+                <input
+                  className="input"
+                  type="password"
+                  value={loginForm.password}
+                  onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm text-slate-300">OTP channel</label>
+                <select
+                  className="input"
+                  value={loginForm.channel}
+                  onChange={(e) => setLoginForm((prev) => ({ ...prev, channel: e.target.value as OtpChannel }))}
+                >
+                  <option value="email">Email</option>
+                  <option value="sms">SMS</option>
+                  <option value="both">Email + SMS</option>
+                </select>
+              </div>
+              <button className="btn w-full" type="submit" disabled={authBusy}>
+                {authBusy ? 'Sending code…' : 'Send code'}
+              </button>
+              <p className="text-xs text-slate-500">Gateway: {BASE_URL}</p>
+            </form>
+          )}
+          {pendingChallenge && (
+            <form className="space-y-4" onSubmit={handleOtpVerify}>
+              <div>
+                <p className="text-sm text-slate-300">Enter the 6-digit code</p>
+                <input
+                  className="input tracking-[0.5em] text-center text-xl"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, ''))}
+                  required
+                />
+                <p className="text-xs text-slate-500 mt-2">Delivered via {pendingChallenge.channels.join(', ')}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn flex-1" type="submit" disabled={authBusy || otpCode.length !== 6}>
+                  {authBusy ? 'Verifying…' : 'Verify code'}
+                </button>
+                <button className="btn bg-slate-800 text-slate-200" type="button" onClick={handleResendOtp} disabled={authBusy}>
+                  Resend code
+                </button>
+                <button className="btn bg-slate-900/40 text-slate-300" type="button" onClick={resetAuthFlow}>
+                  Use another account
+                </button>
+              </div>
+            </form>
+          )}
+          {authError && <p className="text-sm text-rose-300">{authError}</p>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_20%_20%,rgba(34,211,238,0.08),transparent_35%),radial-gradient(circle_at_80%_0%,rgba(251,191,36,0.08),transparent_40%),#070d1b] text-slate-100">
@@ -294,7 +503,15 @@ const App: React.FC = () => {
               <h1 className="text-3xl font-bold">Unified files, beautiful UI.</h1>
               <p className="text-slate-400 text-sm">Sync uploads, pin favorites, search everything.</p>
             </div>
-            <div className="text-sm text-slate-300">{status}</div>
+            <div className="text-right text-sm text-slate-300 space-y-1">
+              <p>{status}</p>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 justify-end">
+                <span>{session.user.email}</span>
+                <button className="btn bg-slate-800 text-slate-200" onClick={handleLogout}>
+                  Log out
+                </button>
+              </div>
+            </div>
           </header>
 
           <main className="p-6 space-y-6">

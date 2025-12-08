@@ -3,12 +3,13 @@ import logging
 import os
 import time
 import uuid
-from typing import Optional
+from typing import Literal, Optional
 
 import grpc
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Response, Request
+import jwt
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from fastapi.responses import StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -19,9 +20,16 @@ except ImportError as exc:  # pragma: no cover
     raise RuntimeError("Run scripts/gen_protos.ps1 to generate gRPC stubs") from exc
 
 from backend.common import metrics
+from backend.gateway.auth_store import OtpChallengeStore, UserStore
 from backend.gateway.node_manager import NodeManagerError, node_manager
+from backend.gateway.notifier import notification_service
 
 ONE_GB = 1024 * 1024 * 1024
+AUTH_SECRET = os.getenv("DFS_AUTH_SECRET", "change-me")
+TOKEN_TTL = int(os.getenv("DFS_AUTH_TOKEN_TTL", "3600"))
+
+user_store = UserStore()
+otp_store = OtpChallengeStore()
 
 app = FastAPI(title="Distributed Storage Gateway", version="0.1.0")
 app.add_middleware(
@@ -73,6 +81,89 @@ class NodeRegisterRequest(BaseModel):
 
 class NodeActionBody(BaseModel):
     node_id: str
+
+
+OtpChannel = Literal["email", "sms", "both"]
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+    channel: Optional[OtpChannel] = None
+
+
+class LoginInitResponse(BaseModel):
+    pending_token: str
+    expires_in: int
+    channels: list[str]
+
+
+class OtpResendRequest(BaseModel):
+    pending_token: str
+    channel: Optional[OtpChannel] = None
+
+
+class OtpVerifyRequest(BaseModel):
+    pending_token: str
+    code: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: dict
+
+
+def _serialize_user(record) -> dict:
+    return {
+        "user_id": record.user_id,
+        "email": record.email,
+        "phone_number": record.phone_number,
+        "otp_channels": record.otp_channels,
+        "created_at": record.created_at,
+    }
+
+
+def _create_access_token(user_id: str) -> tuple[str, int]:
+    expires_at = int(time.time()) + TOKEN_TTL
+    token = jwt.encode({"sub": user_id, "exp": expires_at}, AUTH_SECRET, algorithm="HS256")
+    return token, TOKEN_TTL
+
+
+def _resolve_channels(user, requested: Optional[OtpChannel]) -> list[str]:
+    channels = list(user.otp_channels or ["email"])
+    if requested and requested != "both":
+        if requested not in channels:
+            raise HTTPException(status_code=400, detail="requested channel not enabled for user")
+        channels = [requested]
+    if "sms" in channels and not user.phone_number:
+        channels = [ch for ch in channels if ch != "sms"]
+    if not channels:
+        raise HTTPException(status_code=400, detail="no valid delivery channel configured")
+    return channels
+
+
+async def _dispatch_otp(user, code: str, channels: list[str]) -> None:
+    await asyncio.to_thread(
+        notification_service.notify,
+        email=user.email,
+        phone=user.phone_number,
+        otp_code=code,
+        channels=channels,
+    )
+
+
+def require_user(request: Request) -> str:
+    header = request.headers.get("Authorization")
+    if not header or not header.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    token = header.split(" ", 1)[1].strip()
+    try:
+        payload = jwt.decode(token, AUTH_SECRET, algorithms=["HS256"])
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status_code=401, detail="invalid or expired token") from exc
+    return payload.get("sub")
 
 
 def _master_target() -> str:
@@ -256,6 +347,71 @@ async def list_files(request: Request):
         }
         for f in resp.files
     ]
+
+
+@app.post("/auth/login", response_model=LoginInitResponse)
+async def auth_login(payload: LoginRequest):
+    user = user_store.verify_password(payload.email, payload.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="invalid credentials")
+    channels = _resolve_channels(user, payload.channel)
+    pending_id, code = otp_store.create(user.user_id, channels)
+    try:
+        await _dispatch_otp(user, code, channels)
+    except Exception as exc:  # pragma: no cover - network services
+        logging.error("OTP delivery failed for %s: %s", user.email, exc)
+        raise HTTPException(status_code=502, detail="failed to deliver otp") from exc
+    return LoginInitResponse(pending_token=pending_id, expires_in=otp_store.ttl, channels=channels)
+
+
+@app.post("/auth/otp/resend", response_model=LoginInitResponse)
+async def auth_resend(payload: OtpResendRequest):
+    challenge = otp_store.get_challenge(payload.pending_token)
+    if not challenge:
+        raise HTTPException(status_code=404, detail="challenge expired")
+    user = user_store.get(challenge.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="user missing")
+    try:
+        code, _, stored_channels = otp_store.resend(payload.pending_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    channels = stored_channels
+    if payload.channel and payload.channel != "both":
+        if payload.channel not in channels:
+            raise HTTPException(status_code=400, detail="requested channel not enabled")
+        channels = [payload.channel]
+    try:
+        await _dispatch_otp(user, code, channels)
+    except Exception as exc:  # pragma: no cover
+        logging.error("OTP resend failed for %s: %s", user.email, exc)
+        raise HTTPException(status_code=502, detail="failed to deliver otp") from exc
+    return LoginInitResponse(pending_token=payload.pending_token, expires_in=otp_store.ttl, channels=channels)
+
+
+@app.post("/auth/otp/verify", response_model=TokenResponse)
+async def auth_verify(payload: OtpVerifyRequest):
+    user_id = otp_store.verify(payload.pending_token, payload.code.strip())
+    if not user_id:
+        raise HTTPException(status_code=400, detail="invalid or expired code")
+    user = user_store.get(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="user missing")
+    token, ttl = _create_access_token(user_id)
+    return TokenResponse(access_token=token, expires_in=ttl, user=_serialize_user(user))
+
+
+@app.get("/auth/me")
+async def auth_me(user_id: str = Depends(require_user)):
+    user = user_store.get(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="user missing")
+    return _serialize_user(user)
+
+
+@app.post("/auth/logout")
+async def auth_logout():
+    return {"ok": True}
 
 
 @app.post("/plan", response_model=UploadPlanResponse)

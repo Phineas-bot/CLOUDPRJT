@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AdminSummary,
@@ -7,9 +7,19 @@ import {
   RebalanceInstruction,
   formatBytes,
   formatDate,
+  AuthSession,
+  PendingChallenge,
+  OtpChannel,
+  login as requestLogin,
+  verifyOtp,
+  resendOtp,
+  saveSession,
+  loadSession,
+  fetchMe,
 } from '@shared/index';
 
 const SETTINGS_KEY = 'dfs_admin_settings';
+const SESSION_KEY = 'dfs_admin_session';
 
 type Settings = { baseUrl: string; token: string };
 
@@ -27,9 +37,12 @@ const loadSettings = (): Settings => {
 
 const saveSettings = (settings: Settings) => localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 
-async function fetchJson<T>(baseUrl: string, path: string, token?: string): Promise<T> {
+async function fetchJson<T>(baseUrl: string, path: string, token?: string, bearer?: string): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (token) headers['x-api-key'] = token;
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
   const resp = await fetch(`${baseUrl}${path}`, {
-    headers: token ? { 'x-api-key': token } : undefined,
+    headers: Object.keys(headers).length ? headers : undefined,
   });
   if (!resp.ok) throw new Error(`${path} -> ${resp.status}`);
   return resp.json();
@@ -40,14 +53,15 @@ async function sendJson<T>(
   baseUrl: string,
   path: string,
   token?: string,
-  body?: unknown
+  body?: unknown,
+  bearer?: string
 ): Promise<T | undefined> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['x-api-key'] = token;
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
   const resp = await fetch(`${baseUrl}${path}`, {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { 'x-api-key': token } : {}),
-    },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!resp.ok) throw new Error(`${path} -> ${resp.status}`);
@@ -60,32 +74,73 @@ const App: React.FC = () => {
   const [status, setStatus] = useState('Ready');
   const [selectedNode, setSelectedNode] = useState<NodeDescriptor | null>(null);
   const [newNode, setNewNode] = useState({ node_id: '', host: '127.0.0.1', grpc_port: 50060 });
+  const [session, setSession] = useState<AuthSession | null>(() => loadSession(SESSION_KEY));
+  const [pendingChallenge, setPendingChallenge] = useState<PendingChallenge | null>(null);
+  const [loginForm, setLoginForm] = useState({ email: '', password: '', channel: 'email' as OtpChannel });
+  const [otpCode, setOtpCode] = useState('');
+  const [authStatus, setAuthStatus] = useState('Sign in to operate the fabric');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
   const queryClient = useQueryClient();
 
-  const queryKeyBase = useMemo(() => [settings.baseUrl, settings.token], [settings.baseUrl, settings.token]);
+  useEffect(() => {
+    if (!session) {
+      setAuthStatus('Sign in to operate the fabric');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const user = await fetchMe(settings.baseUrl, session.token);
+        if (cancelled) return;
+        const refreshed = { ...session, user } as AuthSession;
+        setSession(refreshed);
+        saveSession(SESSION_KEY, refreshed);
+        setAuthStatus(`Signed in as ${user.email}`);
+      } catch (err) {
+        if (cancelled) return;
+        saveSession(SESSION_KEY, null);
+        setSession(null);
+        resetAuthFlow();
+        setAuthError('Session expired. Please sign in again.');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.token, settings.baseUrl]);
+
+  const queryKeyBase = useMemo(
+    () => [settings.baseUrl, settings.token, session?.token],
+    [settings.baseUrl, settings.token, session?.token]
+  );
 
   const summaryQuery = useQuery<AdminSummary>({
     queryKey: [...queryKeyBase, 'summary'],
-    queryFn: () => fetchJson(settings.baseUrl, '/admin/summary', settings.token),
+    queryFn: () => fetchJson(settings.baseUrl, '/admin/summary', settings.token, session?.token),
     refetchInterval: 5000,
+    enabled: Boolean(session),
   });
 
   const nodesQuery = useQuery<NodeDescriptor[]>({
     queryKey: [...queryKeyBase, 'nodes'],
-    queryFn: () => fetchJson(settings.baseUrl, '/admin/nodes', settings.token),
+    queryFn: () => fetchJson(settings.baseUrl, '/admin/nodes', settings.token, session?.token),
     refetchInterval: 5000,
+    enabled: Boolean(session),
   });
 
   const rebalancesQuery = useQuery<RebalanceInstruction[]>({
     queryKey: [...queryKeyBase, 'rebalances'],
-    queryFn: () => fetchJson(settings.baseUrl, '/admin/rebalances', settings.token),
+    queryFn: () => fetchJson(settings.baseUrl, '/admin/rebalances', settings.token, session?.token),
     refetchInterval: 5000,
+    enabled: Boolean(session),
   });
 
   const filesQuery = useQuery<FileRecordSummary[]>({
     queryKey: [...queryKeyBase, 'files'],
-    queryFn: () => fetchJson(settings.baseUrl, '/admin/files', settings.token),
+    queryFn: () => fetchJson(settings.baseUrl, '/admin/files', settings.token, session?.token),
     refetchInterval: 5000,
+    enabled: Boolean(session),
   });
 
   const summary = summaryQuery.data;
@@ -93,13 +148,81 @@ const App: React.FC = () => {
   const rebalances = rebalancesQuery.data ?? [];
   const files = filesQuery.data ?? [];
 
+
   const handleSaveSettings = () => {
     saveSettings(settings);
     setStatus('Settings saved');
-    summaryQuery.refetch();
-    nodesQuery.refetch();
-    rebalancesQuery.refetch();
-    filesQuery.refetch();
+    if (session) {
+      summaryQuery.refetch();
+      nodesQuery.refetch();
+      rebalancesQuery.refetch();
+      filesQuery.refetch();
+    }
+  };
+
+  const resetAuthFlow = () => {
+    setPendingChallenge(null);
+    setOtpCode('');
+    setAuthError(null);
+    setAuthStatus('Sign in to operate the fabric');
+  };
+
+  const handleLogout = () => {
+    saveSession(SESSION_KEY, null);
+    setSession(null);
+    resetAuthFlow();
+  };
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const resp = await requestLogin(settings.baseUrl, loginForm);
+      setPendingChallenge(resp);
+      setAuthStatus(`OTP sent via ${resp.channels.join(', ')}`);
+      setOtpCode('');
+    } catch (err: any) {
+      setAuthError(err.message || 'Login failed');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleOtpVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingChallenge) return;
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const freshSession = await verifyOtp(settings.baseUrl, {
+        pending_token: pendingChallenge.pending_token,
+        code: otpCode.trim(),
+      });
+      setSession(freshSession);
+      saveSession(SESSION_KEY, freshSession);
+      resetAuthFlow();
+      setAuthStatus(`Signed in as ${freshSession.user.email}`);
+    } catch (err: any) {
+      setAuthError(err.message || 'Invalid code');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (!pendingChallenge) return;
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const resp = await resendOtp(settings.baseUrl, { pending_token: pendingChallenge.pending_token });
+      setPendingChallenge(resp);
+      setAuthStatus(`New code sent (${resp.channels.join(', ')})`);
+    } catch (err: any) {
+      setAuthError(err.message || 'Resend failed');
+    } finally {
+      setAuthBusy(false);
+    }
   };
 
   const handleAddNode = async () => {
@@ -107,9 +230,13 @@ const App: React.FC = () => {
       setStatus('Provide a node id');
       return;
     }
+    if (!session) {
+      setStatus('Sign in first');
+      return;
+    }
     setStatus('Provisioning node...');
     try {
-      await sendJson('POST', settings.baseUrl, '/admin/nodes/register', settings.token, newNode);
+      await sendJson('POST', settings.baseUrl, '/admin/nodes/register', settings.token, newNode, session.token);
       setStatus(`Node ${newNode.node_id} registered`);
       setNewNode((prev) => ({ ...prev, node_id: '' }));
       await Promise.all([nodesQuery.refetch(), summaryQuery.refetch()]);
@@ -119,6 +246,10 @@ const App: React.FC = () => {
   };
 
   const handleNodeAction = async (nodeId: string, action: 'fail' | 'restore' | 'delete') => {
+    if (!session) {
+      setStatus('Sign in first');
+      return;
+    }
     const map = {
       fail: { method: 'POST', path: '/admin/nodes/fail', body: { node_id: nodeId }, label: 'Failing' },
       restore: { method: 'POST', path: '/admin/nodes/restore', body: { node_id: nodeId }, label: 'Restoring' },
@@ -127,7 +258,7 @@ const App: React.FC = () => {
     const entry = map[action];
     setStatus(`${entry.label} ${nodeId}...`);
     try {
-      await sendJson(entry.method, settings.baseUrl, entry.path, settings.token, entry.body);
+      await sendJson(entry.method, settings.baseUrl, entry.path, settings.token, entry.body, session.token);
       setStatus(`${action === 'fail' ? 'Failed' : action === 'restore' ? 'Restored' : 'Deleted'} ${nodeId}`);
       await Promise.all([nodesQuery.refetch(), summaryQuery.refetch()]);
       queryClient.invalidateQueries({ queryKey: [...queryKeyBase, 'files'] });
@@ -138,6 +269,117 @@ const App: React.FC = () => {
       setStatus(`Action failed: ${err.message}`);
     }
   };
+
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-[radial-gradient(circle_at_10%_10%,rgba(14,165,233,0.12),transparent_35%),radial-gradient(circle_at_90%_10%,rgba(190,24,93,0.12),transparent_40%),#070d1b] text-slate-100 flex items-center justify-center p-6">
+        <div className="w-full max-w-5xl grid gap-6 md:grid-cols-2">
+          <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-6 space-y-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Fabric access</p>
+              <h2 className="text-2xl font-bold">Connection settings</h2>
+              <p className="text-sm text-slate-400">Configure the gateway you want to manage before signing in.</p>
+            </div>
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-sm text-slate-300">Gateway URL</label>
+                <input
+                  className="input"
+                  value={settings.baseUrl}
+                  onChange={(e) => setSettings((s) => ({ ...s, baseUrl: e.target.value }))}
+                  placeholder="http://localhost:8000"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm text-slate-300">x-api-key (optional)</label>
+                <input
+                  className="input"
+                  value={settings.token}
+                  onChange={(e) => setSettings((s) => ({ ...s, token: e.target.value }))}
+                  placeholder="admin token"
+                />
+              </div>
+              <button className="btn w-full" onClick={handleSaveSettings}>Save settings</button>
+            </div>
+          </div>
+          <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-6 space-y-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Phineas Cloud</p>
+              <h2 className="text-2xl font-bold">Admin sign in</h2>
+              <p className="text-sm text-slate-400">{authStatus}</p>
+            </div>
+            {!pendingChallenge && (
+              <form className="space-y-4" onSubmit={handleLoginSubmit}>
+                <div className="space-y-1">
+                  <label className="text-sm text-slate-300">Email</label>
+                  <input
+                    className="input"
+                    type="email"
+                    value={loginForm.email}
+                    onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm text-slate-300">Password</label>
+                  <input
+                    className="input"
+                    type="password"
+                    value={loginForm.password}
+                    onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm text-slate-300">OTP channel</label>
+                  <select
+                    className="input"
+                    value={loginForm.channel}
+                    onChange={(e) => setLoginForm((prev) => ({ ...prev, channel: e.target.value as OtpChannel }))}
+                  >
+                    <option value="email">Email</option>
+                    <option value="sms">SMS</option>
+                    <option value="both">Email + SMS</option>
+                  </select>
+                </div>
+                <button className="btn w-full" type="submit" disabled={authBusy}>
+                  {authBusy ? 'Sending code…' : 'Send code'}
+                </button>
+              </form>
+            )}
+            {pendingChallenge && (
+              <form className="space-y-4" onSubmit={handleOtpVerify}>
+                <div>
+                  <p className="text-sm text-slate-300">Enter the OTP</p>
+                  <input
+                    className="input tracking-[0.5em] text-center text-xl"
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, ''))}
+                    required
+                  />
+                  <p className="text-xs text-slate-500 mt-2">Delivered via {pendingChallenge.channels.join(', ')}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className="btn flex-1" type="submit" disabled={authBusy || otpCode.length !== 6}>
+                    {authBusy ? 'Verifying…' : 'Verify code'}
+                  </button>
+                  <button className="btn bg-slate-800 text-slate-200" type="button" onClick={handleResendOtp} disabled={authBusy}>
+                    Resend code
+                  </button>
+                  <button className="btn bg-slate-900/40 text-slate-300" type="button" onClick={resetAuthFlow}>
+                    Use different account
+                  </button>
+                </div>
+              </form>
+            )}
+            {authError && <p className="text-sm text-rose-300">{authError}</p>}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_10%_10%,rgba(14,165,233,0.12),transparent_35%),radial-gradient(circle_at_90%_10%,rgba(190,24,93,0.12),transparent_40%),#070d1b] text-slate-100">
@@ -170,7 +412,15 @@ const App: React.FC = () => {
                 <h1 className="text-3xl font-bold">Operate the fabric</h1>
                 <p className="text-slate-400 text-sm">Clusters, replicas, transfers, observability, governance.</p>
               </div>
-              <div className="text-sm text-slate-300">{status}</div>
+              <div className="text-right text-sm text-slate-300 space-y-1">
+                <p>{status}</p>
+                <div className="flex flex-wrap items-center justify-end gap-3 text-xs text-slate-400">
+                  <span>{session?.user.email}</span>
+                  <button className="btn bg-slate-800 text-slate-200" onClick={handleLogout}>
+                    Log out
+                  </button>
+                </div>
+              </div>
             </div>
             <div className="flex flex-wrap gap-3 items-end bg-slate-900/40 border border-slate-800 rounded-lg p-3">
               <div className="flex flex-col text-sm min-w-[220px]">

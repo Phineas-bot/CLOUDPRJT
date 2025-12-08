@@ -179,6 +179,23 @@ Can be implemented with:
 
 ---
 
+## 🔐 Authentication & Local Login
+
+The gateway keeps user credentials in `data/user_store.json`. In a fresh checkout this file does not exist, so you need to seed at least one account before the React dashboards can log in.
+
+Set `DFS_USER_STORE` if you want to store the file elsewhere, otherwise the default path under `data/` is used. Then run:
+
+```
+cd backend
+python -m backend.scripts.create_user admin@example.com --password "SuperSecret123" --channels email
+```
+
+Use `--force` to update the password of an existing email, and `--phone`/`--channels email,sms` to enable SMS OTP delivery.
+
+Alternatively, you can seed a user automatically at startup by exporting `DFS_DEFAULT_USER_EMAIL` and `DFS_DEFAULT_USER_PASSWORD` before launching `backend/gateway/api.py`.
+
+---
+
 
 
 
