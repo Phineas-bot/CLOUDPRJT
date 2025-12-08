@@ -1,0 +1,26 @@
+{
+  "name": "dfs-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:user": "npm run dev --workspace apps/user",
+    "dev:admin": "npm run dev --workspace apps/admin",
+    "build": "npm run build --workspaces",
+    "lint": "npm run lint --workspaces",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.25",
+    "autoprefixer": "^10.4.16",
+    "eslint": "^8.57.0",
+    "postcss": "^8.4.33",
+    "prettier": "^3.2.5",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^7.2.7"
+  }
+}

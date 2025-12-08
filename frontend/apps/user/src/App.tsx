@@ -1,0 +1,436 @@
+type Tab = 'drive' | 'recent' | 'favorites' | 'trash' | 'search';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { UploadPlan, UploadChunkResponse, StoredUpload, formatBytes } from '@shared/index';
+
+const UPLOADS_KEY = 'dfs_user_uploads';
+const MB = 1024 * 1024;
+const BASE_URL = import.meta.env.VITE_GATEWAY_URL ?? 'http://localhost:8000';
+
+
+
+const NAV_ITEMS: { key: Tab; label: string }[] = [
+  { key: 'drive', label: 'My Drive' },
+  { key: 'recent', label: 'Recent' },
+  { key: 'favorites', label: 'Favorites' },
+  { key: 'trash', label: 'Trash' },
+  { key: 'search', label: 'Search' },
+];
+
+const determineChunkSize = (fileSize: number): number => {
+  if (!fileSize) return 4 * MB;
+  if (fileSize <= 8 * MB) return 1 * MB;
+  if (fileSize <= 64 * MB) return 2 * MB;
+  if (fileSize <= 256 * MB) return 4 * MB;
+  if (fileSize <= 1024 * MB) return 8 * MB;
+  return 16 * MB;
+};
+
+const normalizeUpload = (raw: StoredUpload): StoredUpload => ({
+  file_id: raw.file_id,
+  file_name: raw.file_name,
+  file_size: raw.file_size,
+  chunk_size: raw.chunk_size,
+  uploaded_at: raw.uploaded_at ?? Date.now(),
+  favorite: raw.favorite ?? false,
+  trashed: raw.trashed ?? false,
+  last_accessed: raw.last_accessed ?? raw.uploaded_at ?? Date.now(),
+});
+
+const loadUploads = (): StoredUpload[] => {
+  try {
+    const raw = localStorage.getItem(UPLOADS_KEY);
+    return raw ? JSON.parse(raw).map(normalizeUpload) : [];
+  } catch (err) {
+    console.warn('uploads load failed', err);
+    return [];
+  }
+};
+
+const persistUploads = (uploads: StoredUpload[]) => localStorage.setItem(UPLOADS_KEY, JSON.stringify(uploads));
+
+const App: React.FC = () => {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploads, setUploads] = useState<StoredUpload[]>(loadUploads);
+  const [activeTab, setActiveTab] = useState<Tab>('drive');
+  const [downloadQuery, setDownloadQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [status, setStatus] = useState('Idle');
+  const [log, setLog] = useState<string[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [pendingChunkSize, setPendingChunkSize] = useState<number | null>(null);
+
+  const nonTrashedUploads = useMemo(() => uploads.filter((u) => !u.trashed), [uploads]);
+  const favoritesCount = useMemo(() => uploads.filter((u) => u.favorite && !u.trashed).length, [uploads]);
+
+  const filteredUploads = useMemo(() => {
+    const base = uploads;
+    switch (activeTab) {
+      case 'favorites':
+        return base.filter((u) => u.favorite && !u.trashed);
+      case 'trash':
+        return base.filter((u) => u.trashed);
+      case 'recent':
+        return base.filter((u) => !u.trashed).sort((a, b) => b.uploaded_at - a.uploaded_at);
+      case 'search': {
+        const q = searchQuery.trim().toLowerCase();
+        if (!q) return base.filter((u) => !u.trashed);
+        return base.filter(
+          (u) =>
+            !u.trashed &&
+            (u.file_name.toLowerCase().includes(q) || u.file_id.toLowerCase().includes(q))
+        );
+      }
+      default:
+        return base.filter((u) => !u.trashed);
+    }
+  }, [uploads, activeTab, searchQuery]);
+
+  const updateUploads = useCallback((updater: (prev: StoredUpload[]) => StoredUpload[]) => {
+    setUploads((prev) => {
+      const next = updater(prev).map(normalizeUpload);
+      persistUploads(next);
+      return next;
+    });
+  }, []);
+
+  const upsertUpload = useCallback(
+    (record: StoredUpload) => {
+      updateUploads((prev) => {
+        const idx = prev.findIndex((u) => u.file_id === record.file_id);
+        if (idx >= 0) {
+          const copy = [...prev];
+          copy[idx] = normalizeUpload({ ...copy[idx], ...record });
+          return copy;
+        }
+        return [normalizeUpload(record), ...prev];
+      });
+    },
+    [updateUploads]
+  );
+
+  const toggleFavorite = (fileId: string) => {
+    updateUploads((prev) =>
+      prev.map((u) => (u.file_id === fileId ? { ...u, favorite: !u.favorite, last_accessed: Date.now() } : u))
+    );
+  };
+
+  const moveToTrash = (fileId: string, value: boolean) => {
+    updateUploads((prev) => prev.map((u) => (u.file_id === fileId ? { ...u, trashed: value } : u)));
+  };
+
+  const deleteForever = (fileId: string) => {
+    updateUploads((prev) => prev.filter((u) => u.file_id !== fileId));
+  };
+
+  const appendLog = useCallback((msg: string) => {
+    setLog((l) => [...l, msg]);
+  }, []);
+
+  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    setPendingChunkSize(file ? determineChunkSize(file.size) : null);
+  };
+
+  const handleUpload = useCallback(async () => {
+    const file = fileInputRef.current?.files?.[0];
+    if (!file) {
+      setStatus('Select a file first');
+      return;
+    }
+    const chunkSizeBytes = determineChunkSize(file.size);
+    setPendingChunkSize(chunkSizeBytes);
+    setIsUploading(true);
+    setStatus('Planning upload...');
+    setLog([]);
+
+    try {
+      const planResp = await fetch(`${BASE_URL}/plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_name: file.name, file_size: file.size, chunk_size: chunkSizeBytes }),
+      });
+      if (!planResp.ok) throw new Error(`/plan -> ${planResp.status}`);
+      const plan: UploadPlan = await planResp.json();
+      const totalReplicaWrites = plan.placements.reduce((acc, placement) => acc + placement.replicas.length, 0);
+      appendLog(`Planned ${plan.placements.length} chunks (${totalReplicaWrites} replicas total)`);
+
+      let completedWrites = 0;
+      for (const placement of plan.placements) {
+        const start = placement.chunk_index * plan.chunk_size;
+        const end = Math.min(start + plan.chunk_size, file.size);
+        const chunk = file.slice(start, end);
+
+        for (const replica of placement.replicas) {
+          setStatus(`Uploading chunk ${placement.chunk_index + 1}/${plan.placements.length}`);
+          const form = new FormData();
+          form.append('file_id', plan.file_id);
+          form.append('chunk_id', placement.chunk_id);
+          form.append('chunk_index', String(placement.chunk_index));
+          form.append('node_id', replica.node_id);
+          form.append('node_host', replica.host);
+          form.append('node_port', String(replica.grpc_port));
+          form.append('chunk', chunk, `${file.name}.part${placement.chunk_index}`);
+
+          const uploadResp = await fetch(`${BASE_URL}/upload/chunk`, {
+            method: 'POST',
+            body: form,
+          });
+          if (!uploadResp.ok) throw new Error(`/upload/chunk -> ${uploadResp.status}`);
+          const uploadJson = (await uploadResp.json()) as UploadChunkResponse;
+          if (!uploadJson.ok) throw new Error(uploadJson.reason || 'upload failed');
+
+          completedWrites += 1;
+          appendLog(`Stored replica ${completedWrites}/${totalReplicaWrites}`);
+        }
+      }
+
+      const record: StoredUpload = {
+        file_id: plan.file_id,
+        file_name: file.name,
+        file_size: file.size,
+        chunk_size: plan.chunk_size,
+        uploaded_at: Date.now(),
+        favorite: false,
+        trashed: false,
+        last_accessed: Date.now(),
+      };
+      upsertUpload(record);
+      setStatus('Upload complete');
+    } catch (err: any) {
+      console.error(err);
+      setStatus(`Upload failed: ${err.message}`);
+      appendLog(`Error: ${err.message}`);
+    } finally {
+      setIsUploading(false);
+    }
+  }, [appendLog, upsertUpload]);
+
+  const resolveDownloadTarget = (query: string): StoredUpload | undefined => {
+    const trimmed = query.trim();
+    if (!trimmed) return undefined;
+    const byId = uploads.find((u) => u.file_id === trimmed);
+    if (byId) return byId;
+    return uploads.find((u) => u.file_name.toLowerCase() === trimmed.toLowerCase());
+  };
+
+  const recordAccess = (fileId: string) => {
+    updateUploads((prev) => prev.map((u) => (u.file_id === fileId ? { ...u, last_accessed: Date.now() } : u)));
+  };
+
+  const handleDownload = useCallback(
+    async (fromRow?: StoredUpload) => {
+      const candidate = fromRow || resolveDownloadTarget(downloadQuery);
+      if (!candidate) {
+        setStatus('Enter a valid file name or id');
+        return;
+      }
+
+      setIsDownloading(true);
+      setStatus('Downloading...');
+      try {
+        const resp = await fetch(`${BASE_URL}/download/${candidate.file_id}`);
+        if (!resp.ok) throw new Error(`/download -> ${resp.status}`);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = candidate.file_name || `${candidate.file_id}.bin`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus('Download complete');
+        recordAccess(candidate.file_id);
+      } catch (err: any) {
+        console.error(err);
+        setStatus(`Download failed: ${err.message}`);
+      } finally {
+        setIsDownloading(false);
+      }
+    },
+    [downloadQuery, uploads]
+  );
+
+  const chunkSizeLabel = pendingChunkSize ? `${(pendingChunkSize / MB).toFixed(0)} MB auto` : 'auto based on file size';
+
+  return (
+    <div className="min-h-screen bg-[radial-gradient(circle_at_20%_20%,rgba(34,211,238,0.08),transparent_35%),radial-gradient(circle_at_80%_0%,rgba(251,191,36,0.08),transparent_40%),#070d1b] text-slate-100">
+      <div className="grid min-h-screen md:grid-cols-[260px_1fr]">
+        <aside className="hidden md:flex flex-col gap-6 bg-slate-950/70 border-r border-slate-900/70 p-6">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Nexus</p>
+            <h2 className="text-xl font-bold">Phineas Cloud</h2>
+          </div>
+          <nav className="space-y-2">
+            {NAV_ITEMS.map((item) => (
+              <button
+                key={item.key}
+                className={`w-full text-left px-3 py-2 rounded-lg border transition ${
+                  activeTab === item.key
+                    ? 'border-cyan-400 bg-slate-900 text-slate-100'
+                    : 'border-transparent text-slate-400 hover:text-slate-100'
+                }`}
+                onClick={() => setActiveTab(item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div className="card space-y-2">
+            <p className="text-xs uppercase text-slate-500">Storage used</p>
+            <p className="text-2xl font-bold">{formatBytes(nonTrashedUploads.reduce((sum, u) => sum + u.file_size, 0))}</p>
+            <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
+              <div className="h-full bg-cyan-400" style={{ width: `${Math.min(nonTrashedUploads.length * 8, 100)}%` }}></div>
+            </div>
+            <button className="w-full text-left text-sm text-cyan-300">Buy storage →</button>
+          </div>
+        </aside>
+
+        <div className="flex flex-col min-h-screen">
+          <header className="sticky top-0 z-10 backdrop-blur bg-slate-900/70 border-b border-slate-800 px-6 py-4 flex flex-wrap items-center gap-4 justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-400">Phineas Cloud</p>
+              <h1 className="text-3xl font-bold">Unified files, beautiful UI.</h1>
+              <p className="text-slate-400 text-sm">Sync uploads, pin favorites, search everything.</p>
+            </div>
+            <div className="text-sm text-slate-300">{status}</div>
+          </header>
+
+          <main className="p-6 space-y-6">
+            <section className="grid gap-4 lg:grid-cols-3">
+              <div className="card">
+                <p className="text-xs uppercase text-slate-400">Files synced</p>
+                <p className="text-3xl font-bold">{nonTrashedUploads.length}</p>
+              </div>
+              <div className="card">
+                <p className="text-xs uppercase text-slate-400">Favorites</p>
+                <p className="text-3xl font-bold">{favoritesCount}</p>
+              </div>
+              <div className="card">
+                <p className="text-xs uppercase text-slate-400">Trash</p>
+                <p className="text-3xl font-bold">{uploads.filter((u) => u.trashed).length}</p>
+              </div>
+            </section>
+
+            <section className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+              <div className="card space-y-4">
+                <div className="flex flex-wrap gap-3 items-end">
+                  <div className="flex-1 min-w-[220px]">
+                    <p className="text-sm text-slate-300">Select file</p>
+                    <input ref={fileInputRef} type="file" className="text-slate-200" onChange={handleFilePick} />
+                  </div>
+                  <div className="text-sm text-slate-400 min-w-[140px]">Chunk size: {chunkSizeLabel}</div>
+                  <button className="btn" onClick={handleUpload} disabled={isUploading}>
+                    {isUploading ? 'Uploading…' : 'Upload file'}
+                  </button>
+                </div>
+                <div className="bg-slate-900/70 border border-slate-800 rounded-lg p-3 text-sm min-h-[120px] whitespace-pre-wrap">
+                  {log.join('\n') || 'Awaiting upload...'}
+                </div>
+              </div>
+
+              <div className="card space-y-3">
+                <p className="text-sm text-slate-300">Download</p>
+                <input
+                  className="input"
+                  value={downloadQuery}
+                  onChange={(e) => setDownloadQuery(e.target.value)}
+                  placeholder="File name or file id"
+                />
+                <button className="btn w-full" onClick={() => handleDownload()} disabled={isDownloading}>
+                  {isDownloading ? 'Downloading…' : 'Download'}
+                </button>
+              </div>
+            </section>
+
+            {activeTab === 'search' && (
+              <section className="card space-y-3">
+                <p className="text-xs uppercase text-slate-400">Search</p>
+                <input
+                  className="input"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Type to filter by name or id"
+                />
+              </section>
+            )}
+
+            <section className="card space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs uppercase text-slate-400">{NAV_ITEMS.find((n) => n.key === activeTab)?.label}</p>
+                  <h2 className="text-lg font-semibold">{activeTab === 'trash' ? 'Trash bin' : 'Files'}</h2>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-slate-400 uppercase text-xs">
+                      <th className="py-2 pr-3">File</th>
+                      <th className="py-2 pr-3">Size</th>
+                      <th className="py-2 pr-3">File ID</th>
+                      <th className="py-2 pr-3">Uploaded</th>
+                      <th className="py-2 pr-3">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredUploads.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="py-3 text-slate-400 text-center">No files yet</td>
+                      </tr>
+                    )}
+                    {filteredUploads.map((u) => (
+                      <tr key={u.file_id} className="border-t border-slate-800">
+                        <td className="py-2 pr-3">
+                          <div className="font-semibold">{u.file_name}</div>
+                          <div className="text-xs text-slate-500">{u.favorite ? '★ Favorite' : ''}</div>
+                        </td>
+                        <td className="py-2 pr-3 text-slate-300">{formatBytes(u.file_size)}</td>
+                        <td className="py-2 pr-3 text-slate-400 text-xs break-all">{u.file_id}</td>
+                        <td className="py-2 pr-3 text-slate-400 text-xs">{new Date(u.uploaded_at).toLocaleString()}</td>
+                        <td className="py-2 pr-3 space-x-2">
+                          {!u.trashed && (
+                            <>
+                              <button className="btn" onClick={() => handleDownload(u)} disabled={isDownloading}>
+                                Download
+                              </button>
+                              <button
+                                className="btn bg-slate-800 text-slate-200"
+                                onClick={() => toggleFavorite(u.file_id)}
+                              >
+                                {u.favorite ? 'Unfavorite' : 'Favorite'}
+                              </button>
+                              <button
+                                className="btn bg-rose-500/20 text-rose-200"
+                                onClick={() => moveToTrash(u.file_id, true)}
+                              >
+                                Trash
+                              </button>
+                            </>
+                          )}
+                          {u.trashed && (
+                            <>
+                              <button className="btn bg-emerald-500/20 text-emerald-200" onClick={() => moveToTrash(u.file_id, false)}>
+                                Restore
+                              </button>
+                              <button className="btn bg-rose-600/30 text-rose-200" onClick={() => deleteForever(u.file_id)}>
+                                Delete
+                              </button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </main>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default App;

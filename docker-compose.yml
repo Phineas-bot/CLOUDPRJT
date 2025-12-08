@@ -1,0 +1,72 @@
+version: '3.9'
+services:
+  master:
+    build: .
+    command: python -m backend.grpc.master_server
+    environment:
+      DFS_HEARTBEAT_INTERVAL: 5
+      DFS_HEARTBEAT_TIMEOUT: 15
+      DFS_REBALANCE_INTERVAL: 5
+      DFS_METRICS_PORT: 9000
+    ports:
+      - "50050:50050"
+      - "9000:9000"
+
+  gateway:
+    build: .
+    command: uvicorn backend.gateway.api:app --host 0.0.0.0 --port 8000
+    environment:
+      DFS_MASTER_HOST: master
+      DFS_MASTER_PORT: 50050
+    depends_on:
+      - master
+    ports:
+      - "8000:8000"
+
+  storage1:
+    build: .
+    command: python -m backend.grpc.storage_server --node-id node1 --data-dir /data/node1 --port 50051 --host 0.0.0.0
+    environment:
+      DFS_MASTER_HOST: master
+      DFS_MASTER_PORT: 50050
+      NODE_PUBLIC_HOST: storage1
+      DFS_STORAGE_METRICS_PORT: 9101
+    depends_on:
+      - master
+    ports:
+      - "50051:50051"
+      - "9101:9101"
+    volumes:
+      - storage1-data:/data/node1
+
+  storage2:
+    build: .
+    command: python -m backend.grpc.storage_server --node-id node2 --data-dir /data/node2 --port 50052 --host 0.0.0.0
+    environment:
+      DFS_MASTER_HOST: master
+      DFS_MASTER_PORT: 50050
+      NODE_PUBLIC_HOST: storage2
+      DFS_STORAGE_METRICS_PORT: 9102
+    depends_on:
+      - master
+    ports:
+      - "50052:50052"
+      - "9102:9102"
+    volumes:
+      - storage2-data:/data/node2
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - master
+      - gateway
+      - storage1
+      - storage2
+
+volumes:
+  storage1-data:
+  storage2-data:

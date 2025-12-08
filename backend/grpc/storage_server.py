@@ -129,7 +129,12 @@ async def serve(args: Optional[argparse.Namespace] = None) -> None:
     # Register with master if configured
     master_host = os.getenv("DFS_MASTER_HOST", "localhost")
     master_port = int(os.getenv("DFS_MASTER_PORT", "50050"))
-    register_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
+    if os.getenv("DFS_MASTER_TLS", "0") == "1":
+        ca_path = os.getenv("DFS_MASTER_CA", "")
+        creds = grpc.ssl_channel_credentials(root_certificates=open(ca_path, "rb").read() if ca_path else None)
+        register_channel = grpc.aio.secure_channel(f"{master_host}:{master_port}", creds)
+    else:
+        register_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
     register_stub = pb2_grpc.MasterServiceStub(register_channel)
     capacity, free = node.disk_stats()
     public_host = os.getenv("NODE_PUBLIC_HOST", args.host)
@@ -152,7 +157,12 @@ async def serve(args: Optional[argparse.Namespace] = None) -> None:
         logging.warning("Failed to register node with master: %s", exc)
 
     # Heartbeat loop
-    hb_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
+    if os.getenv("DFS_MASTER_TLS", "0") == "1":
+        ca_path = os.getenv("DFS_MASTER_CA", "")
+        creds = grpc.ssl_channel_credentials(root_certificates=open(ca_path, "rb").read() if ca_path else None)
+        hb_channel = grpc.aio.secure_channel(f"{master_host}:{master_port}", creds)
+    else:
+        hb_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
     hb_stub = pb2_grpc.MasterServiceStub(hb_channel)
     interval = int(os.getenv("DFS_HEARTBEAT_INTERVAL", "5"))
     metrics.maybe_start_metrics_server(int(os.getenv("DFS_STORAGE_METRICS_PORT", "0")) or None)

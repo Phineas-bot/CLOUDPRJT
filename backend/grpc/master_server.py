@@ -181,13 +181,23 @@ async def serve() -> None:
     service = MasterService()
     server = grpc.aio.server()
     pb2_grpc.add_MasterServiceServicer_to_server(MasterGrpc(service), server)
-    server.add_insecure_port(_server_address())
-    logging.info("Master gRPC listening on %s", _server_address())
+    cert = os.getenv("DFS_TLS_CERT")
+    key = os.getenv("DFS_TLS_KEY")
+    if cert and key:
+        with open(cert, "rb") as f:
+            cert_data = f.read()
+        with open(key, "rb") as f:
+            key_data = f.read()
+        server.add_secure_port(_server_address(), grpc.ssl_server_credentials([(key_data, cert_data)]))
+        logging.info("Master gRPC listening (TLS) on %s", _server_address())
+    else:
+        server.add_insecure_port(_server_address())
+        logging.info("Master gRPC listening on %s", _server_address())
 
     # Start housekeeping loop to mark overdue nodes unhealthy
     settings = load_settings()
     monitor_task = asyncio.create_task(_monitor_nodes(service, max(1.0, settings.heartbeat_timeout / 2)))
-    rebalance_task = asyncio.create_task(_rebalance_scheduler(service, max(1.0, settings.heartbeat_timeout / 2)))
+    rebalance_task = asyncio.create_task(_rebalance_scheduler(service, max(1.0, settings.rebalance_interval)))
     metrics.maybe_start_metrics_server(int(os.getenv("DFS_METRICS_PORT", "0")) or None)
 
     await server.start()

@@ -15,6 +15,8 @@ class Settings:
     replication_factor: int = _int_from_env("DFS_REPLICATION", 3)
     heartbeat_interval: int = _int_from_env("DFS_HEARTBEAT_INTERVAL", 5)
     heartbeat_timeout: int = _int_from_env("DFS_HEARTBEAT_TIMEOUT", 15)
+    rebalance_interval: int = _int_from_env("DFS_REBALANCE_INTERVAL", 5)
+    rebalance_max_per_node: int = _int_from_env("DFS_REBALANCE_MAX_PER_NODE", 2)
 
     @property
     def as_dict(self) -> dict:

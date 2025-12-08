@@ -33,6 +33,7 @@ class MasterService:
     def plan_rebalances(self) -> list[tuple[str, str, str]]:
         healthy = {n.node_id: n for n in self.store.list_healthy_nodes()}
         instructions: list[tuple[str, str, str]] = []
+        target_counts = {}
         for file in self.store._files.values():  # pylint: disable=protected-access
             chunk_bytes = file.chunk_size or self.settings.chunk_size
             for placement in file.placements:
@@ -46,7 +47,7 @@ class MasterService:
                 candidate_targets = [
                     n for n in healthy.values() if n.node_id not in placement.replicas and n.free_bytes >= chunk_bytes
                 ]
-                candidate_targets.sort(key=lambda n: (n.free_bytes, n.capacity_bytes), reverse=True)
+                candidate_targets.sort(key=lambda n: (-(n.load_factor or 0.0), n.free_bytes, n.capacity_bytes), reverse=True)
 
                 # choose a source replica with the most free space (bias toward healthier hosts)
                 source_candidates = sorted(
@@ -55,8 +56,15 @@ class MasterService:
                 # Prefer healthy source with most free space; fallback to the first recorded replica even if now unhealthy
                 source_node_id = source_candidates[0].node_id if source_candidates else (placement.replicas[0] if placement.replicas else "")
 
-                for target in candidate_targets[:deficit]:
+                assigned = 0
+                for target in candidate_targets:
+                    if target_counts.get(target.node_id, 0) >= self.settings.rebalance_max_per_node:
+                        continue
                     instructions.append((placement.chunk_id, source_node_id, target.node_id))
+                    target_counts[target.node_id] = target_counts.get(target.node_id, 0) + 1
+                    assigned += 1
+                    if assigned >= deficit:
+                        break
         return instructions
 
     def refresh_rebalances(self) -> list[tuple[str, str, str]]:
