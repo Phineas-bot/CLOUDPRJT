@@ -92,10 +92,20 @@ class MasterService:
         return targeted
 
     def get_upload_plan(self, file_id: str, file_name: str, file_size: int, requested_chunk_size: Optional[int] = None) -> tuple[int, list[ChunkPlacement]]:
-        if requested_chunk_size and requested_chunk_size > 0:
-            self.settings.chunk_size = requested_chunk_size
+        # Respect per-request chunk size overrides without mutating global settings
+        chunk_size_override = requested_chunk_size if requested_chunk_size and requested_chunk_size > 0 else None
         healthy = self.store.list_healthy_nodes()
-        chunk_size, placements = placement.plan_upload(file_id, file_name, file_size, self.settings, healthy)
+        effective_settings = self.settings
+        if chunk_size_override:
+            effective_settings = Settings(
+                chunk_size=chunk_size_override,
+                replication_factor=self.settings.replication_factor,
+                heartbeat_interval=self.settings.heartbeat_interval,
+                heartbeat_timeout=self.settings.heartbeat_timeout,
+                rebalance_interval=self.settings.rebalance_interval,
+                rebalance_max_per_node=self.settings.rebalance_max_per_node,
+            )
+        chunk_size, placements = placement.plan_upload(file_id, file_name, file_size, effective_settings, healthy)
 
         # Persist initial file record with planned placements
         record = FileRecord(

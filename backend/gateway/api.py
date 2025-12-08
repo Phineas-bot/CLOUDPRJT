@@ -35,7 +35,9 @@ async def metrics_middleware(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     duration = time.perf_counter() - start
-    path = request.url.path
+    route = request.scope.get("route")
+    # Use the path template (e.g., /download/{file_id}) to avoid exploding label cardinality
+    path = getattr(route, "path_format", None) or getattr(route, "path", None) or request.url.path
     metrics.REQUEST_COUNT.labels(method=request.method, path=path, status=str(response.status_code)).inc()
     metrics.REQUEST_LATENCY.observe(duration)
     return response
@@ -287,14 +289,21 @@ async def download_file(file_id: str):
         if not available:
             metrics.DOWNLOAD_RESULT.labels(status="no_replicas").inc()
             raise HTTPException(status_code=502, detail=f"no replicas for chunk {placement.chunk_id}")
-        target = available[0]
-        channel, stub = await _storage_stub(target.host, target.grpc_port)
-        async with channel:
-            resp = await stub.DownloadChunk(pb2.DownloadChunkRequest(chunk_id=placement.chunk_id))
-        if not resp.ok:
+        chunk_data: Optional[bytes] = None
+        last_error: Optional[str] = None
+        for target in available:
+            channel, stub = await _storage_stub(target.host, target.grpc_port)
+            async with channel:
+                resp = await stub.DownloadChunk(pb2.DownloadChunkRequest(chunk_id=placement.chunk_id))
+            if resp.ok:
+                chunk_data = resp.data
+                break
+            last_error = resp.reason or "unknown"
+        if chunk_data is None:
             metrics.DOWNLOAD_RESULT.labels(status="chunk_error").inc()
-            raise HTTPException(status_code=502, detail=f"chunk fetch failed: {resp.reason}")
-        chunks.append(resp.data)
+            detail = f"chunk fetch failed after trying {len(available)} replicas: {last_error or 'unknown'}"
+            raise HTTPException(status_code=502, detail=detail)
+        chunks.append(chunk_data)
 
     blob = b"".join(chunks)
     metrics.DOWNLOAD_RESULT.labels(status="ok").inc()
