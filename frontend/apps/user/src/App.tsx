@@ -19,8 +19,12 @@ import {
 
 const UPLOADS_KEY = 'dfs_user_uploads';
 const SESSION_KEY = 'dfs_user_session';
+const CHUNK_LOG_KEY = 'dfs_chunk_activity';
 const MB = 1024 * 1024;
+const STORAGE_LIMIT_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB per user
 const BASE_URL = import.meta.env.VITE_GATEWAY_URL ?? 'http://localhost:8000';
+
+type ChunkLogEntry = { message: string; ts: number };
 
 
 
@@ -52,30 +56,49 @@ const normalizeUpload = (raw: StoredUpload): StoredUpload => ({
   last_accessed: raw.last_accessed ?? raw.uploaded_at ?? Date.now(),
 });
 
-const loadUploads = (): StoredUpload[] => {
+const loadUploads = (key: string): StoredUpload[] => {
   try {
-    const raw = localStorage.getItem(UPLOADS_KEY);
+    const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw).map(normalizeUpload) : [];
   } catch (err) {
     console.warn('uploads load failed', err);
     return [];
   }
 };
+const persistUploads = (key: string, uploads: StoredUpload[]) => localStorage.setItem(key, JSON.stringify(uploads));
 
-const persistUploads = (uploads: StoredUpload[]) => localStorage.setItem(UPLOADS_KEY, JSON.stringify(uploads));
+const readChunkLog = (): ChunkLogEntry[] => {
+  try {
+    const raw = localStorage.getItem(CHUNK_LOG_KEY);
+    return raw ? (JSON.parse(raw) as ChunkLogEntry[]) : [];
+  } catch (err) {
+    console.warn('chunk log load failed', err);
+    return [];
+  }
+};
+
+const pushChunkLog = (message: string) => {
+  const next = [{ message, ts: Date.now() }, ...readChunkLog()].slice(0, 50);
+  localStorage.setItem(CHUNK_LOG_KEY, JSON.stringify(next));
+};
 
 const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [uploads, setUploads] = useState<StoredUpload[]>(loadUploads);
+  const [session, setSession] = useState<AuthSession | null>(() => loadSession(SESSION_KEY));
+  const uploadsKey = useMemo(
+    () => (session?.user?.user_id ? `${UPLOADS_KEY}_${session.user.user_id}` : `${UPLOADS_KEY}_anon`),
+    [session?.user?.user_id]
+  );
+  const [uploads, setUploads] = useState<StoredUpload[]>(() => loadUploads(uploadsKey));
   const [activeTab, setActiveTab] = useState<Tab>('drive');
   const [downloadQuery, setDownloadQuery] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [status, setStatus] = useState('Idle');
-  const [log, setLog] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [downloadProgress, setDownloadProgress] = useState(0);
   const [pendingChunkSize, setPendingChunkSize] = useState<number | null>(null);
-  const [session, setSession] = useState<AuthSession | null>(() => loadSession(SESSION_KEY));
   const [pendingChallenge, setPendingChallenge] = useState<PendingChallenge | null>(null);
   const [loginForm, setLoginForm] = useState({ email: '', password: '', channel: 'email' as OtpChannel });
   const [signupForm, setSignupForm] = useState({ email: '', password: '', phone_number: '', channel: 'email' as OtpChannel });
@@ -85,6 +108,10 @@ const App: React.FC = () => {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState('Sign in to continue');
   const [authBusy, setAuthBusy] = useState(false);
+
+  useEffect(() => {
+    setUploads(loadUploads(uploadsKey));
+  }, [uploadsKey]);
 
   useEffect(() => {
     if (!session) {
@@ -115,6 +142,14 @@ const App: React.FC = () => {
 
   const nonTrashedUploads = useMemo(() => uploads.filter((u) => !u.trashed), [uploads]);
   const favoritesCount = useMemo(() => uploads.filter((u) => u.favorite && !u.trashed).length, [uploads]);
+  const storageUsedBytes = useMemo(
+    () => nonTrashedUploads.reduce((sum, u) => sum + u.file_size, 0),
+    [nonTrashedUploads]
+  );
+  const storageRemainingBytes = useMemo(
+    () => Math.max(0, STORAGE_LIMIT_BYTES - storageUsedBytes),
+    [storageUsedBytes]
+  );
 
   const filteredUploads = useMemo(() => {
     const base = uploads;
@@ -139,13 +174,16 @@ const App: React.FC = () => {
     }
   }, [uploads, activeTab, searchQuery]);
 
-  const updateUploads = useCallback((updater: (prev: StoredUpload[]) => StoredUpload[]) => {
-    setUploads((prev) => {
-      const next = updater(prev).map(normalizeUpload);
-      persistUploads(next);
-      return next;
-    });
-  }, []);
+  const updateUploads = useCallback(
+    (updater: (prev: StoredUpload[]) => StoredUpload[]) => {
+      setUploads((prev) => {
+        const next = updater(prev).map(normalizeUpload);
+        persistUploads(uploadsKey, next);
+        return next;
+      });
+    },
+    [uploadsKey]
+  );
 
   const upsertUpload = useCallback(
     (record: StoredUpload) => {
@@ -175,10 +213,6 @@ const App: React.FC = () => {
   const deleteForever = (fileId: string) => {
     updateUploads((prev) => prev.filter((u) => u.file_id !== fileId));
   };
-
-  const appendLog = useCallback((msg: string) => {
-    setLog((l) => [...l, msg]);
-  }, []);
 
   const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -286,12 +320,18 @@ const App: React.FC = () => {
       setStatus('Select a file first');
       return;
     }
+    const projectedUsage = storageUsedBytes + file.size;
+    if (projectedUsage > STORAGE_LIMIT_BYTES) {
+      const overage = projectedUsage - STORAGE_LIMIT_BYTES;
+      setStatus(`Storage limit reached (2 GB). Free up ${formatBytes(overage)} to upload.`);
+      return;
+    }
     const authHeaders = { Authorization: `Bearer ${session.token}` };
     const chunkSizeBytes = determineChunkSize(file.size);
     setPendingChunkSize(chunkSizeBytes);
     setIsUploading(true);
     setStatus('Planning upload...');
-    setLog([]);
+    setUploadProgress(0);
 
     try {
       const planResp = await fetch(`${BASE_URL}/plan`, {
@@ -302,7 +342,7 @@ const App: React.FC = () => {
       if (!planResp.ok) throw new Error(`/plan -> ${planResp.status}`);
       const plan: UploadPlan = await planResp.json();
       const totalReplicaWrites = plan.placements.reduce((acc, placement) => acc + placement.replicas.length, 0);
-      appendLog(`Planned ${plan.placements.length} chunks (${totalReplicaWrites} replicas total)`);
+      pushChunkLog(`Planned ${plan.placements.length} chunks (${totalReplicaWrites} replicas total)`);
 
       let completedWrites = 0;
       for (const placement of plan.placements) {
@@ -331,7 +371,8 @@ const App: React.FC = () => {
           if (!uploadJson.ok) throw new Error(uploadJson.reason || 'upload failed');
 
           completedWrites += 1;
-          appendLog(`Stored replica ${completedWrites}/${totalReplicaWrites}`);
+          pushChunkLog(`Stored replica ${completedWrites}/${totalReplicaWrites}`);
+          setUploadProgress(Math.round((completedWrites / totalReplicaWrites) * 100));
         }
       }
 
@@ -347,14 +388,18 @@ const App: React.FC = () => {
       };
       upsertUpload(record);
       setStatus('Upload complete');
+      setUploadProgress(100);
+      pushChunkLog(`Upload complete for ${file.name} (${plan.file_id})`);
     } catch (err: any) {
       console.error(err);
       setStatus(`Upload failed: ${err.message}`);
-      appendLog(`Error: ${err.message}`);
+      pushChunkLog(`Upload failed: ${err.message}`);
+      setUploadProgress(0);
     } finally {
       setIsUploading(false);
+      setUploadProgress(0);
     }
-  }, [appendLog, upsertUpload, session]);
+  }, [upsertUpload, session, storageUsedBytes]);
 
   const resolveDownloadTarget = (query: string): StoredUpload | undefined => {
     const trimmed = query.trim();
@@ -382,12 +427,14 @@ const App: React.FC = () => {
 
       setIsDownloading(true);
       setStatus('Downloading...');
+      setDownloadProgress(10);
       try {
         const resp = await fetch(`${BASE_URL}/download/${candidate.file_id}`, {
           headers: { Authorization: `Bearer ${session.token}` },
         });
         if (!resp.ok) throw new Error(`/download -> ${resp.status}`);
         const blob = await resp.blob();
+        setDownloadProgress(75);
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -397,10 +444,12 @@ const App: React.FC = () => {
         a.remove();
         URL.revokeObjectURL(url);
         setStatus('Download complete');
+        setDownloadProgress(100);
         recordAccess(candidate.file_id);
       } catch (err: any) {
         console.error(err);
         setStatus(`Download failed: ${err.message}`);
+        setDownloadProgress(0);
       } finally {
         setIsDownloading(false);
       }
@@ -581,11 +630,15 @@ const App: React.FC = () => {
           </nav>
           <div className="card space-y-2">
             <p className="text-xs uppercase text-slate-500">Storage used</p>
-            <p className="text-2xl font-bold">{formatBytes(nonTrashedUploads.reduce((sum, u) => sum + u.file_size, 0))}</p>
+            <p className="text-2xl font-bold">{formatBytes(storageUsedBytes)}</p>
+            <p className="text-sm text-slate-400">of {formatBytes(STORAGE_LIMIT_BYTES)} ({formatBytes(storageRemainingBytes)} left)</p>
             <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
-              <div className="h-full bg-cyan-400" style={{ width: `${Math.min(nonTrashedUploads.length * 8, 100)}%` }}></div>
+              <div
+                className="h-full bg-cyan-400"
+                style={{ width: `${Math.min((storageUsedBytes / STORAGE_LIMIT_BYTES) * 100, 100)}%` }}
+              ></div>
             </div>
-            <button className="w-full text-left text-sm text-cyan-300">Buy storage →</button>
+            <p className="text-xs text-slate-500">Each account is capped at 2 GB.</p>
           </div>
         </aside>
 
@@ -593,7 +646,7 @@ const App: React.FC = () => {
           <header className="sticky top-0 z-10 backdrop-blur bg-slate-900/70 border-b border-slate-800 px-6 py-4 flex flex-wrap items-center gap-4 justify-between">
             <div>
               <p className="text-xs uppercase tracking-wide text-slate-400">Phineas Cloud</p>
-              <h1 className="text-3xl font-bold">Unified files, beautiful UI.</h1>
+              <h1 className="text-3xl font-bold">Unified files, secure storage.</h1>
               <p className="text-slate-400 text-sm">Sync uploads, pin favorites, search everything.</p>
             </div>
             <div className="text-right text-sm text-slate-300 space-y-1">
@@ -635,9 +688,21 @@ const App: React.FC = () => {
                     {isUploading ? 'Uploading…' : 'Upload file'}
                   </button>
                 </div>
-                <div className="bg-slate-900/70 border border-slate-800 rounded-lg p-3 text-sm min-h-[120px] whitespace-pre-wrap">
-                  {log.join('\n') || 'Awaiting upload...'}
-                </div>
+                {isUploading && (
+                  <div className="bg-slate-900/70 border border-slate-800 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center justify-between text-xs text-slate-400">
+                      <span>Uploading chunks</span>
+                      <span>{uploadProgress}%</span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-cyan-400 via-blue-400 to-emerald-400 transition-all duration-300 animate-pulse"
+                        style={{ width: `${uploadProgress}%` }}
+                      ></div>
+                    </div>
+                    <p className="text-xs text-slate-500">{status}</p>
+                  </div>
+                )}
               </div>
 
               <div className="card space-y-3">
@@ -651,6 +716,12 @@ const App: React.FC = () => {
                 <button className="btn w-full" onClick={() => handleDownload()} disabled={isDownloading}>
                   {isDownloading ? 'Downloading…' : 'Download'}
                 </button>
+                <div className="w-full h-2 rounded-full bg-slate-900/60 border border-slate-800 overflow-hidden">
+                  <div
+                    className={`h-full bg-gradient-to-r from-emerald-400 to-cyan-400 transition-all duration-300 ${isDownloading ? 'animate-pulse' : ''}`}
+                    style={{ width: `${downloadProgress}%` }}
+                  ></div>
+                </div>
               </div>
             </section>
 

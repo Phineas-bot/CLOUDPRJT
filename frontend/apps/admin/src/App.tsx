@@ -17,6 +17,9 @@ import {
 
 const SETTINGS_KEY = 'dfs_admin_settings';
 const SESSION_KEY = 'dfs_admin_session';
+const CHUNK_LOG_KEY = 'dfs_chunk_activity';
+
+type ChunkLogEntry = { message: string; ts: number };
 
 type Settings = { baseUrl: string; token: string };
 
@@ -33,6 +36,16 @@ const loadSettings = (): Settings => {
 };
 
 const saveSettings = (settings: Settings) => localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+
+const loadChunkLog = (): ChunkLogEntry[] => {
+  try {
+    const raw = localStorage.getItem(CHUNK_LOG_KEY);
+    return raw ? (JSON.parse(raw) as ChunkLogEntry[]) : [];
+  } catch (err) {
+    console.warn('chunk log load failed', err);
+    return [];
+  }
+};
 
 async function fetchJson<T>(baseUrl: string, path: string, token?: string, bearer?: string): Promise<T> {
   const headers: Record<string, string> = {};
@@ -79,6 +92,7 @@ const App: React.FC = () => {
   const [authStatus, setAuthStatus] = useState('Sign in to operate the fabric');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
+  const [chunkLogs, setChunkLogs] = useState<ChunkLogEntry[]>(loadChunkLog);
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -107,6 +121,12 @@ const App: React.FC = () => {
       cancelled = true;
     };
   }, [session?.token, settings.baseUrl]);
+
+  useEffect(() => {
+    const refresh = () => setChunkLogs(loadChunkLog());
+    window.addEventListener('storage', refresh);
+    return () => window.removeEventListener('storage', refresh);
+  }, []);
 
   const queryKeyBase = useMemo(
     () => [settings.baseUrl, settings.token, session?.token],
@@ -145,6 +165,12 @@ const App: React.FC = () => {
   const nodes = nodesQuery.data ?? [];
   const rebalances = rebalancesQuery.data ?? [];
   const files = filesQuery.data ?? [];
+
+  const refreshChunkLogs = () => setChunkLogs(loadChunkLog());
+  const clearChunkLogs = () => {
+    localStorage.removeItem(CHUNK_LOG_KEY);
+    setChunkLogs([]);
+  };
 
 
   const handleSaveSettings = () => {
@@ -527,6 +553,28 @@ const App: React.FC = () => {
                   <p>Total files tracked: {summary?.total_files ?? '—'}</p>
                   <p>Total chunks: {summary?.total_chunks ?? '—'}</p>
                 </div>
+              </div>
+            </section>
+
+            <section className="card space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs uppercase text-slate-400">Chunks</p>
+                  <h2 className="text-lg font-semibold">Recent activity</h2>
+                </div>
+                <div className="flex gap-2 text-xs">
+                  <button className="btn bg-slate-800 text-slate-200" onClick={refreshChunkLogs}>Refresh</button>
+                  <button className="btn bg-rose-600/30 text-rose-100" onClick={clearChunkLogs}>Clear</button>
+                </div>
+              </div>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {chunkLogs.length === 0 && <p className="text-slate-400 text-sm">No recent chunk events.</p>}
+                {chunkLogs.map((entry) => (
+                  <div key={`${entry.ts}-${entry.message}`} className="border border-slate-800 rounded-lg px-3 py-2 bg-slate-900/60">
+                    <p className="text-xs text-slate-500">{formatDate(entry.ts)}</p>
+                    <p className="text-sm text-slate-200">{entry.message}</p>
+                  </div>
+                ))}
               </div>
             </section>
 
