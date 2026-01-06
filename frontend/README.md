@@ -20,6 +20,9 @@ npm run dev:user   # starts user app on 5173
 npm run dev:admin  # starts admin app on 5174
 ```
 
+Auth options
+- Password + OTP (existing flow)
+
 ## Build
 ```powershell
 npm run build --workspaces

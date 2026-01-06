@@ -1,5 +1,5 @@
-import asyncio
 import logging
+import asyncio
 import os
 import time
 import uuid
@@ -92,6 +92,18 @@ class LoginRequest(BaseModel):
     channel: Optional[OtpChannel] = None
 
 
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: str
+    phone_number: Optional[str] = None
+    channel: Optional[OtpChannel] = None
+
+
+class AdminSignupRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
 class LoginInitResponse(BaseModel):
     pending_token: str
     expires_in: int
@@ -122,6 +134,7 @@ def _serialize_user(record) -> dict:
         "phone_number": record.phone_number,
         "otp_channels": record.otp_channels,
         "created_at": record.created_at,
+        "role": getattr(record, "role", "user"),
     }
 
 
@@ -141,6 +154,18 @@ def _resolve_channels(user, requested: Optional[OtpChannel]) -> list[str]:
         channels = [ch for ch in channels if ch != "sms"]
     if not channels:
         raise HTTPException(status_code=400, detail="no valid delivery channel configured")
+    return channels
+
+
+def _channels_for_signup(phone_number: Optional[str], requested: Optional[OtpChannel]) -> list[str]:
+    channels = ["email"]
+    has_phone = bool(phone_number)
+    if requested in ("sms", "both"):
+        if not has_phone:
+            raise HTTPException(status_code=400, detail="phone number required for sms otp")
+        channels.append("sms")
+    elif requested is None and has_phone:
+        channels.append("sms")
     return channels
 
 
@@ -354,6 +379,8 @@ async def auth_login(payload: LoginRequest):
     user = user_store.verify_password(payload.email, payload.password)
     if not user:
         raise HTTPException(status_code=401, detail="invalid credentials")
+    if getattr(user, "role", "user") != "user":
+        raise HTTPException(status_code=403, detail="not a user account")
     channels = _resolve_channels(user, payload.channel)
     pending_id, code = otp_store.create(user.user_id, channels)
     try:
@@ -397,7 +424,60 @@ async def auth_verify(payload: OtpVerifyRequest):
     user = user_store.get(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="user missing")
+    if getattr(user, "role", "user") != "user":
+        raise HTTPException(status_code=403, detail="not a user account")
     token, ttl = _create_access_token(user_id)
+    return TokenResponse(access_token=token, expires_in=ttl, user=_serialize_user(user))
+
+
+@app.post("/auth/signup", response_model=LoginInitResponse)
+async def auth_signup(payload: SignupRequest):
+    channels = _channels_for_signup(payload.phone_number, payload.channel)
+    try:
+        user = user_store.create_user(
+            email=payload.email,
+            password=payload.password,
+            phone_number=payload.phone_number,
+            otp_channels=channels,
+            role="user",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    pending_id, code = otp_store.create(user.user_id, channels)
+    try:
+        await _dispatch_otp(user, code, channels)
+    except Exception as exc:  # pragma: no cover - network services
+        logging.error("OTP delivery failed for %s: %s", user.email, exc)
+        raise HTTPException(status_code=502, detail="failed to deliver otp") from exc
+
+    return LoginInitResponse(pending_token=pending_id, expires_in=otp_store.ttl, channels=channels)
+
+
+@app.post("/admin/auth/login", response_model=TokenResponse)
+async def admin_login(payload: LoginRequest):
+    user = user_store.verify_password(payload.email, payload.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="invalid credentials")
+    if getattr(user, "role", "user") != "admin":
+        raise HTTPException(status_code=403, detail="not an admin account")
+    token, ttl = _create_access_token(user.user_id)
+    return TokenResponse(access_token=token, expires_in=ttl, user=_serialize_user(user))
+
+
+@app.post("/admin/auth/signup", response_model=TokenResponse)
+async def admin_signup(payload: AdminSignupRequest):
+    try:
+        user = user_store.create_user(
+            email=payload.email,
+            password=payload.password,
+            phone_number=None,
+            otp_channels=["email"],
+            role="admin",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    token, ttl = _create_access_token(user.user_id)
     return TokenResponse(access_token=token, expires_in=ttl, user=_serialize_user(user))
 
 
@@ -447,7 +527,11 @@ async def get_plan(req: UploadPlanRequest):
 
 async def _storage_stub(host: str, port: int):
     target = f"{host}:{port}"
-    channel = grpc.aio.insecure_channel(target)
+    grpc_opts = [
+        ("grpc.max_send_message_length", 64 * 1024 * 1024),
+        ("grpc.max_receive_message_length", 64 * 1024 * 1024),
+    ]
+    channel = grpc.aio.insecure_channel(target, options=grpc_opts)
     stub = pb2_grpc.StorageServiceStub(channel)
     return channel, stub
 

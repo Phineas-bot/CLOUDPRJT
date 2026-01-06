@@ -16,6 +16,9 @@ This backend is written in Python and uses gRPC for all inter-service calls. Rea
 4) Run a storage node: `NODE_ID=node1 python -m backend.grpc.storage_server --data-dir data/node1 --port 50051`
 5) Run gateway API: `python -m backend.gateway.api`
 
+Env hints:
+- Set `DFS_AUTH_SECRET` to a strong value (required for JWT + OTP hashing).
+
 ## Notes
 - Metadata is in-memory for now; snapshotting can be added in `master/metadata_store.py`.
 - Storage layout: `data/<node_id>/<file_id>/<chunk_index>.chk`.

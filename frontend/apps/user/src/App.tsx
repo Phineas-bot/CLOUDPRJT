@@ -9,6 +9,7 @@ import {
   PendingChallenge,
   OtpChannel,
   login as requestLogin,
+  signup as requestSignup,
   resendOtp,
   verifyOtp,
   saveSession,
@@ -77,6 +78,9 @@ const App: React.FC = () => {
   const [session, setSession] = useState<AuthSession | null>(() => loadSession(SESSION_KEY));
   const [pendingChallenge, setPendingChallenge] = useState<PendingChallenge | null>(null);
   const [loginForm, setLoginForm] = useState({ email: '', password: '', channel: 'email' as OtpChannel });
+  const [signupForm, setSignupForm] = useState({ email: '', password: '', phone_number: '', channel: 'email' as OtpChannel });
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [showPassword, setShowPassword] = useState(false);
   const [otpCode, setOtpCode] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState('Sign in to continue');
@@ -186,6 +190,7 @@ const App: React.FC = () => {
     setOtpCode('');
     setAuthError(null);
     setAuthStatus('Sign in to continue');
+    setAuthMode('login');
   };
 
   const handleLogout = () => {
@@ -227,6 +232,30 @@ const App: React.FC = () => {
       setAuthStatus(`Signed in as ${freshSession.user.email}`);
     } catch (err: any) {
       setAuthError(err.message || 'Invalid code');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSignupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const payload = {
+        email: signupForm.email,
+        password: signupForm.password,
+        phone_number: signupForm.phone_number || undefined,
+        channel: signupForm.channel,
+      };
+      const resp = await requestSignup(BASE_URL, payload);
+      setPendingChallenge(resp);
+      setAuthStatus(`OTP sent via ${resp.channels.join(', ')}`);
+      setOtpCode('');
+      setAuthMode('login');
+      setLoginForm({ email: signupForm.email, password: signupForm.password, channel: signupForm.channel });
+    } catch (err: any) {
+      setAuthError(err.message || 'Signup failed');
     } finally {
       setAuthBusy(false);
     }
@@ -391,44 +420,108 @@ const App: React.FC = () => {
             <p className="text-sm text-slate-400">{authStatus}</p>
           </div>
           {!pendingChallenge && (
-            <form className="space-y-4" onSubmit={handleLoginSubmit}>
-              <div className="space-y-1">
-                <label className="text-sm text-slate-300">Email</label>
-                <input
-                  className="input"
-                  type="email"
-                  value={loginForm.email}
-                  onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
-                  required
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-sm text-slate-300">Password</label>
-                <input
-                  className="input"
-                  type="password"
-                  value={loginForm.password}
-                  onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
-                  required
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-sm text-slate-300">OTP channel</label>
-                <select
-                  className="input"
-                  value={loginForm.channel}
-                  onChange={(e) => setLoginForm((prev) => ({ ...prev, channel: e.target.value as OtpChannel }))}
+            <>
+              <div className="flex justify-between items-center text-sm text-slate-400">
+                <span>{authMode === 'login' ? 'Need an account?' : 'Already registered?'}</span>
+                <button
+                  type="button"
+                  className="text-blue-400 hover:text-blue-200 font-medium"
+                  onClick={() => {
+                    const nextMode = authMode === 'login' ? 'signup' : 'login';
+                    setAuthMode(nextMode);
+                    setPendingChallenge(null);
+                    setAuthError(null);
+                    setOtpCode('');
+                    setAuthStatus(nextMode === 'signup' ? 'Create your account' : 'Sign in to continue');
+                  }}
                 >
-                  <option value="email">Email</option>
-                  <option value="sms">SMS</option>
-                  <option value="both">Email + SMS</option>
-                </select>
+                  {authMode === 'login' ? 'Sign up' : 'Back to login'}
+                </button>
               </div>
-              <button className="btn w-full" type="submit" disabled={authBusy}>
-                {authBusy ? 'Sending code…' : 'Send code'}
-              </button>
-              <p className="text-xs text-slate-500">Gateway: {BASE_URL}</p>
-            </form>
+
+              <form
+                className="space-y-4"
+                onSubmit={authMode === 'login' ? handleLoginSubmit : handleSignupSubmit}
+              >
+                <div className="space-y-1">
+                  <label className="text-sm text-slate-300">Email</label>
+                  <input
+                    className="input"
+                    type="email"
+                    value={authMode === 'login' ? loginForm.email : signupForm.email}
+                    onChange={(e) =>
+                      authMode === 'login'
+                        ? setLoginForm((prev) => ({ ...prev, email: e.target.value }))
+                        : setSignupForm((prev) => ({ ...prev, email: e.target.value }))
+                    }
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm text-slate-300">Password</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="input flex-1"
+                      type={showPassword ? 'text' : 'password'}
+                      value={authMode === 'login' ? loginForm.password : signupForm.password}
+                      onChange={(e) =>
+                        authMode === 'login'
+                          ? setLoginForm((prev) => ({ ...prev, password: e.target.value }))
+                          : setSignupForm((prev) => ({ ...prev, password: e.target.value }))
+                      }
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="btn bg-slate-800 text-slate-200 whitespace-nowrap"
+                      onClick={() => setShowPassword((v) => !v)}
+                    >
+                      {showPassword ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                </div>
+
+                {authMode === 'signup' && (
+                  <div className="space-y-1">
+                    <label className="text-sm text-slate-300">Phone (for SMS OTP)</label>
+                    <input
+                      className="input"
+                      type="tel"
+                      value={signupForm.phone_number}
+                      onChange={(e) => setSignupForm((prev) => ({ ...prev, phone_number: e.target.value }))}
+                      placeholder="Optional"
+                    />
+                  </div>
+                )}
+
+                <div className="space-y-1">
+                  <label className="text-sm text-slate-300">OTP channel</label>
+                  <select
+                    className="input"
+                    value={authMode === 'login' ? loginForm.channel : signupForm.channel}
+                    onChange={(e) => {
+                      const channel = e.target.value as OtpChannel;
+                      authMode === 'login'
+                        ? setLoginForm((prev) => ({ ...prev, channel }))
+                        : setSignupForm((prev) => ({ ...prev, channel }));
+                    }}
+                  >
+                    <option value="email">Email</option>
+                    <option value="sms">SMS</option>
+                    <option value="both">Email + SMS</option>
+                  </select>
+                </div>
+
+                <button className="btn w-full" type="submit" disabled={authBusy}>
+                  {authBusy
+                    ? 'Working…'
+                    : authMode === 'login'
+                      ? 'Send code'
+                      : 'Sign up & send code'}
+                </button>
+                <p className="text-xs text-slate-500">Gateway: {BASE_URL}</p>
+              </form>
+            </>
           )}
           {pendingChallenge && (
             <form className="space-y-4" onSubmit={handleOtpVerify}>

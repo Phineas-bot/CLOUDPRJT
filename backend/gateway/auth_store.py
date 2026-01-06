@@ -22,10 +22,11 @@ def _now() -> float:
 class UserRecord:
     user_id: str
     email: str
-    password_hash: str
+    password_hash: Optional[str]
     phone_number: Optional[str]
     otp_channels: List[str]
     created_at: float
+    role: str = "user"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -70,10 +71,11 @@ class UserStore:
             record = UserRecord(
                 user_id=raw["user_id"],
                 email=raw["email"],
-                password_hash=raw["password_hash"],
+                password_hash=raw.get("password_hash"),
                 phone_number=raw.get("phone_number"),
                 otp_channels=raw.get("otp_channels", ["email"]),
                 created_at=raw.get("created_at", _now()),
+                role=raw.get("role", "user"),
             )
             self._users[record.user_id] = record
             self._email_index[record.email.lower()] = record.user_id
@@ -93,6 +95,7 @@ class UserStore:
             phone_number=phone,
             otp_channels=["email", "sms"] if phone else ["email"],
             created_at=_now(),
+            role="user",
         )
         self.add_user(record)
         logging.info("Seeded default user %s", email)
@@ -121,11 +124,30 @@ class UserStore:
         if not record:
             return None
         try:
-            if bcrypt.checkpw(password.encode("utf-8"), record.password_hash.encode("utf-8")):
+            if record.password_hash and bcrypt.checkpw(password.encode("utf-8"), record.password_hash.encode("utf-8")):
                 return record
         except ValueError:
             logging.error("Corrupt password hash for %s", email)
         return None
+
+    def create_user(self, *, email: str, password: str, phone_number: Optional[str], otp_channels: List[str], role: str = "user") -> UserRecord:
+        with self._lock:
+            if self.find_by_email(email):
+                raise ValueError("email already exists")
+            hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            record = UserRecord(
+                user_id=uuid.uuid4().hex,
+                email=email,
+                password_hash=hashed,
+                phone_number=phone_number,
+                otp_channels=otp_channels,
+                created_at=_now(),
+                role=role,
+            )
+            self._users[record.user_id] = record
+            self._email_index[email.lower()] = record.user_id
+            self._persist()
+            return record
 
 
 class OtpChallengeStore:

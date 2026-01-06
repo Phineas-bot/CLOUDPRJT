@@ -16,6 +16,13 @@ except ImportError as exc:  # pragma: no cover
     raise RuntimeError("Run scripts/gen_protos.ps1 to generate gRPC stubs") from exc
 
 
+GRPC_MAX_MB = 64
+GRPC_CHANNEL_OPTS = [
+    ("grpc.max_send_message_length", GRPC_MAX_MB * 1024 * 1024),
+    ("grpc.max_receive_message_length", GRPC_MAX_MB * 1024 * 1024),
+]
+
+
 class StorageGrpc(pb2_grpc.StorageServiceServicer):
     def __init__(self, node: StorageNode):
         self.node = node
@@ -52,6 +59,12 @@ def _parse_args() -> argparse.Namespace:
 
 def _address(host: str, port: int) -> str:
     return f"{host}:{port}"
+
+
+async def _storage_stub(host: str, port: int):
+    channel = grpc.aio.insecure_channel(_address(host, port), options=GRPC_CHANNEL_OPTS)
+    stub = pb2_grpc.StorageServiceStub(channel)
+    return channel, stub
 
 
 async def heartbeat_loop(node: StorageNode, stub: pb2_grpc.MasterServiceStub, node_id: str, interval: float) -> None:
@@ -122,7 +135,7 @@ async def replicate_chunk(node: StorageNode, instr: pb2.RebalanceInstruction, ma
 async def serve(args: Optional[argparse.Namespace] = None) -> None:
     args = args or _parse_args()
     node = StorageNode(args.node_id, args.data_dir, capacity_bytes=args.capacity_bytes or None)
-    server = grpc.aio.server()
+    server = grpc.aio.server(options=GRPC_CHANNEL_OPTS)
     pb2_grpc.add_StorageServiceServicer_to_server(StorageGrpc(node), server)
     server.add_insecure_port(_address(args.host, args.port))
     logging.info("Storage node %s listening on %s", args.node_id, _address(args.host, args.port))
@@ -135,7 +148,7 @@ async def serve(args: Optional[argparse.Namespace] = None) -> None:
         creds = grpc.ssl_channel_credentials(root_certificates=open(ca_path, "rb").read() if ca_path else None)
         register_channel = grpc.aio.secure_channel(f"{master_host}:{master_port}", creds)
     else:
-        register_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
+        register_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}", options=GRPC_CHANNEL_OPTS)
     register_stub = pb2_grpc.MasterServiceStub(register_channel)
     capacity, free = node.disk_stats()
     public_host = os.getenv("NODE_PUBLIC_HOST", args.host)
@@ -163,7 +176,7 @@ async def serve(args: Optional[argparse.Namespace] = None) -> None:
         creds = grpc.ssl_channel_credentials(root_certificates=open(ca_path, "rb").read() if ca_path else None)
         hb_channel = grpc.aio.secure_channel(f"{master_host}:{master_port}", creds)
     else:
-        hb_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
+        hb_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}", options=GRPC_CHANNEL_OPTS)
     hb_stub = pb2_grpc.MasterServiceStub(hb_channel)
     interval = int(os.getenv("DFS_HEARTBEAT_INTERVAL", "5"))
     metrics.maybe_start_metrics_server(int(os.getenv("DFS_STORAGE_METRICS_PORT", "0")) or None)

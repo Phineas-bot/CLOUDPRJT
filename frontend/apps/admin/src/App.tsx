@@ -8,14 +8,11 @@ import {
   formatBytes,
   formatDate,
   AuthSession,
-  PendingChallenge,
-  OtpChannel,
-  login as requestLogin,
-  verifyOtp,
-  resendOtp,
   saveSession,
   loadSession,
   fetchMe,
+  adminLogin,
+  adminSignup,
 } from '@shared/index';
 
 const SETTINGS_KEY = 'dfs_admin_settings';
@@ -75,9 +72,10 @@ const App: React.FC = () => {
   const [selectedNode, setSelectedNode] = useState<NodeDescriptor | null>(null);
   const [newNode, setNewNode] = useState({ node_id: '', host: '127.0.0.1', grpc_port: 50060 });
   const [session, setSession] = useState<AuthSession | null>(() => loadSession(SESSION_KEY));
-  const [pendingChallenge, setPendingChallenge] = useState<PendingChallenge | null>(null);
-  const [loginForm, setLoginForm] = useState({ email: '', password: '', channel: 'email' as OtpChannel });
-  const [otpCode, setOtpCode] = useState('');
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
+  const [signupForm, setSignupForm] = useState({ email: '', password: '' });
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [showPassword, setShowPassword] = useState(false);
   const [authStatus, setAuthStatus] = useState('Sign in to operate the fabric');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
@@ -161,10 +159,9 @@ const App: React.FC = () => {
   };
 
   const resetAuthFlow = () => {
-    setPendingChallenge(null);
-    setOtpCode('');
     setAuthError(null);
     setAuthStatus('Sign in to operate the fabric');
+    setAuthMode('login');
   };
 
   const handleLogout = () => {
@@ -178,10 +175,11 @@ const App: React.FC = () => {
     setAuthBusy(true);
     setAuthError(null);
     try {
-      const resp = await requestLogin(settings.baseUrl, loginForm);
-      setPendingChallenge(resp);
-      setAuthStatus(`OTP sent via ${resp.channels.join(', ')}`);
-      setOtpCode('');
+      const freshSession = await adminLogin(settings.baseUrl, loginForm);
+      setSession(freshSession);
+      saveSession(SESSION_KEY, freshSession);
+      resetAuthFlow();
+      setAuthStatus(`Signed in as ${freshSession.user.email}`);
     } catch (err: any) {
       setAuthError(err.message || 'Login failed');
     } finally {
@@ -189,37 +187,18 @@ const App: React.FC = () => {
     }
   };
 
-  const handleOtpVerify = async (e: React.FormEvent) => {
+  const handleSignupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pendingChallenge) return;
     setAuthBusy(true);
     setAuthError(null);
     try {
-      const freshSession = await verifyOtp(settings.baseUrl, {
-        pending_token: pendingChallenge.pending_token,
-        code: otpCode.trim(),
-      });
+      const freshSession = await adminSignup(settings.baseUrl, signupForm);
       setSession(freshSession);
       saveSession(SESSION_KEY, freshSession);
       resetAuthFlow();
-      setAuthStatus(`Signed in as ${freshSession.user.email}`);
+      setAuthStatus(`Signed up as ${freshSession.user.email}`);
     } catch (err: any) {
-      setAuthError(err.message || 'Invalid code');
-    } finally {
-      setAuthBusy(false);
-    }
-  };
-
-  const handleResendOtp = async () => {
-    if (!pendingChallenge) return;
-    setAuthBusy(true);
-    setAuthError(null);
-    try {
-      const resp = await resendOtp(settings.baseUrl, { pending_token: pendingChallenge.pending_token });
-      setPendingChallenge(resp);
-      setAuthStatus(`New code sent (${resp.channels.join(', ')})`);
-    } catch (err: any) {
-      setAuthError(err.message || 'Resend failed');
+      setAuthError(err.message || 'Signup failed');
     } finally {
       setAuthBusy(false);
     }
@@ -305,75 +284,66 @@ const App: React.FC = () => {
           <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-6 space-y-4">
             <div>
               <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Phineas Cloud</p>
-              <h2 className="text-2xl font-bold">Admin sign in</h2>
+              <h2 className="text-2xl font-bold">Admin {authMode === 'login' ? 'sign in' : 'sign up'}</h2>
               <p className="text-sm text-slate-400">{authStatus}</p>
             </div>
-            {!pendingChallenge && (
-              <form className="space-y-4" onSubmit={handleLoginSubmit}>
-                <div className="space-y-1">
-                  <label className="text-sm text-slate-300">Email</label>
+            <div className="flex justify-between text-sm text-slate-400">
+              <span>{authMode === 'login' ? 'Need an admin account?' : 'Already have an admin account?'}</span>
+              <button
+                type="button"
+                className="text-blue-300 hover:text-blue-200 font-medium"
+                onClick={() => {
+                  const next = authMode === 'login' ? 'signup' : 'login';
+                  setAuthMode(next);
+                  setAuthError(null);
+                  setAuthStatus(next === 'signup' ? 'Create an admin account' : 'Sign in to operate the fabric');
+                }}
+              >
+                {authMode === 'login' ? 'Sign up' : 'Back to login'}
+              </button>
+            </div>
+            <form className="space-y-4" onSubmit={authMode === 'login' ? handleLoginSubmit : handleSignupSubmit}>
+              <div className="space-y-1">
+                <label className="text-sm text-slate-300">Email</label>
+                <input
+                  className="input"
+                  type="email"
+                  value={authMode === 'login' ? loginForm.email : signupForm.email}
+                  onChange={(e) =>
+                    authMode === 'login'
+                      ? setLoginForm((prev) => ({ ...prev, email: e.target.value }))
+                      : setSignupForm((prev) => ({ ...prev, email: e.target.value }))
+                  }
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm text-slate-300">Password</label>
+                <div className="flex items-center gap-2">
                   <input
-                    className="input"
-                    type="email"
-                    value={loginForm.email}
-                    onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
+                    className="input flex-1"
+                    type={showPassword ? 'text' : 'password'}
+                    value={authMode === 'login' ? loginForm.password : signupForm.password}
+                    onChange={(e) =>
+                      authMode === 'login'
+                        ? setLoginForm((prev) => ({ ...prev, password: e.target.value }))
+                        : setSignupForm((prev) => ({ ...prev, password: e.target.value }))
+                    }
                     required
                   />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-sm text-slate-300">Password</label>
-                  <input
-                    className="input"
-                    type="password"
-                    value={loginForm.password}
-                    onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-sm text-slate-300">OTP channel</label>
-                  <select
-                    className="input"
-                    value={loginForm.channel}
-                    onChange={(e) => setLoginForm((prev) => ({ ...prev, channel: e.target.value as OtpChannel }))}
+                  <button
+                    type="button"
+                    className="btn bg-slate-800 text-slate-200 whitespace-nowrap"
+                    onClick={() => setShowPassword((v) => !v)}
                   >
-                    <option value="email">Email</option>
-                    <option value="sms">SMS</option>
-                    <option value="both">Email + SMS</option>
-                  </select>
-                </div>
-                <button className="btn w-full" type="submit" disabled={authBusy}>
-                  {authBusy ? 'Sending code…' : 'Send code'}
-                </button>
-              </form>
-            )}
-            {pendingChallenge && (
-              <form className="space-y-4" onSubmit={handleOtpVerify}>
-                <div>
-                  <p className="text-sm text-slate-300">Enter the OTP</p>
-                  <input
-                    className="input tracking-[0.5em] text-center text-xl"
-                    inputMode="numeric"
-                    maxLength={6}
-                    value={otpCode}
-                    onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, ''))}
-                    required
-                  />
-                  <p className="text-xs text-slate-500 mt-2">Delivered via {pendingChallenge.channels.join(', ')}</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button className="btn flex-1" type="submit" disabled={authBusy || otpCode.length !== 6}>
-                    {authBusy ? 'Verifying…' : 'Verify code'}
-                  </button>
-                  <button className="btn bg-slate-800 text-slate-200" type="button" onClick={handleResendOtp} disabled={authBusy}>
-                    Resend code
-                  </button>
-                  <button className="btn bg-slate-900/40 text-slate-300" type="button" onClick={resetAuthFlow}>
-                    Use different account
+                    {showPassword ? 'Hide' : 'Show'}
                   </button>
                 </div>
-              </form>
-            )}
+              </div>
+              <button className="btn w-full" type="submit" disabled={authBusy}>
+                {authBusy ? 'Working…' : authMode === 'login' ? 'Sign in' : 'Sign up'}
+              </button>
+            </form>
             {authError && <p className="text-sm text-rose-300">{authError}</p>}
           </div>
         </div>

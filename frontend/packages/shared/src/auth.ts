@@ -37,6 +37,18 @@ export type VerifyPayload = {
   code: string;
 };
 
+export type SignupPayload = {
+  email: string;
+  password: string;
+  phone_number?: string;
+  channel?: OtpChannel;
+};
+
+export type AdminSignupPayload = {
+  email: string;
+  password: string;
+};
+
 const parseSession = (dto: { access_token: string; token_type: string; expires_in: number; user: AuthUser }): AuthSession => ({
   token: dto.access_token,
   token_type: dto.token_type,
@@ -85,6 +97,35 @@ export async function fetchMe(baseUrl: string, token: string): Promise<AuthUser>
     headers: { Authorization: `Bearer ${token}` },
   });
   return readJson<AuthUser>(resp);
+}
+
+export async function signup(baseUrl: string, payload: SignupPayload): Promise<PendingChallenge> {
+  const resp = await fetch(`${baseUrl}/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson<PendingChallenge>(resp);
+}
+
+export async function adminLogin(baseUrl: string, payload: LoginPayload): Promise<AuthSession> {
+  const resp = await fetch(`${baseUrl}/admin/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await readJson<{ access_token: string; token_type: string; expires_in: number; user: AuthUser }>(resp);
+  return parseSession(data);
+}
+
+export async function adminSignup(baseUrl: string, payload: AdminSignupPayload): Promise<AuthSession> {
+  const resp = await fetch(`${baseUrl}/admin/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await readJson<{ access_token: string; token_type: string; expires_in: number; user: AuthUser }>(resp);
+  return parseSession(data);
 }
 
 export function loadSession(key: string): AuthSession | null {
