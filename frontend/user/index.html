@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>User Drive</title>
+  <style>
+    :root {
+      --bg: #0b132b;
+      --panel: #111927;
+      --card: #13253f;
+      --accent: #fbbf24;
+      --accent-2: #22d3ee;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --error: #f87171;
+      --success: #34d399;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Inter", "Segoe UI", sans-serif;
+      background: radial-gradient(circle at 12% 10%, rgba(251,191,36,0.08), transparent 32%),
+                  radial-gradient(circle at 88% 12%, rgba(34,211,238,0.09), transparent 36%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 24px;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      background: rgba(11,19,43,0.9);
+      backdrop-filter: blur(8px);
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 0.4px; }
+    main { padding: 24px; display: grid; gap: 16px; }
+    .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+    .card {
+      background: var(--card);
+      border: 1px solid #1f2937;
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.25);
+    }
+    label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 13px; letter-spacing: 0.2px; }
+    input[type="text"], input[type="number"] {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #1f2937;
+      background: #0f172a;
+      color: var(--text);
+    }
+    input[type="file"] { color: var(--text); }
+    button {
+      background: linear-gradient(120deg, var(--accent), var(--accent-2));
+      color: #0f172a;
+      border: none;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 120ms ease, box-shadow 120ms ease;
+      box-shadow: 0 12px 30px rgba(34, 211, 238, 0.28);
+    }
+    button:hover { transform: translateY(-1px); box-shadow: 0 14px 34px rgba(34, 211, 238, 0.32); }
+    button:active { transform: translateY(0); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px; text-align: left; }
+    th { color: var(--muted); font-size: 12px; letter-spacing: 0.5px; border-bottom: 1px solid #1f2937; }
+    tr:not(:last-child) td { border-bottom: 1px solid #112031; }
+    .muted { color: var(--muted); }
+    .status { font-size: 13px; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; }
+    .pill.ok { background: rgba(52,211,153,0.12); color: var(--success); }
+    .pill.err { background: rgba(248,113,113,0.12); color: var(--error); }
+    .log { font-family: "JetBrains Mono", Consolas, monospace; background: #0f172a; border-radius: 10px; padding: 10px; border: 1px solid #1f2937; min-height: 90px; white-space: pre-wrap; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="muted" style="font-size:13px; text-transform: uppercase; letter-spacing: 0.5px;">User</div>
+      <h1>Drive Client</h1>
+    </div>
+    <div class="status" id="status">Idle</div>
+  </header>
+  <main>
+    <section class="grid">
+      <div class="card">
+        <div class="muted" style="margin-bottom:8px;">Gateway</div>
+        <div class="row">
+          <div>
+            <label for="base-url">Base URL</label>
+            <input id="base-url" type="text" placeholder="http://localhost:8000" />
+          </div>
+          <div>
+            <label for="admin-token">Admin Token (optional for download/meta)</label>
+            <input id="admin-token" type="text" placeholder="x-api-key value" />
+          </div>
+        </div>
+        <div style="margin-top:10px; display:flex; gap:10px;">
+          <button id="save-settings">Save</button>
+          <span class="muted" style="font-size:12px; align-self:center;">Saved to localStorage</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="muted" style="margin-bottom:8px;">Download</div>
+        <div class="row">
+          <div>
+            <label for="download-id">File ID</label>
+            <input id="download-id" type="text" placeholder="file_id" />
+          </div>
+          <div>
+            <label for="download-name">Save As (optional)</label>
+            <input id="download-name" type="text" placeholder="myfile.bin" />
+          </div>
+        </div>
+        <div style="margin-top:10px;">
+          <button id="download-btn">Download</button>
+        </div>
+        <div class="muted" style="font-size:12px; margin-top:8px;">Download uses /download/{file_id}. Provide a filename to save locally.</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="muted" style="margin-bottom:8px;">Upload</div>
+      <div class="row">
+        <div>
+          <label for="file-input">Select File</label>
+          <input id="file-input" type="file" />
+        </div>
+        <div>
+          <label for="chunk-size">Chunk Size (MB, optional)</label>
+          <input id="chunk-size" type="number" min="1" step="1" placeholder="e.g. 4" />
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <button id="upload-btn">Start Upload</button>
+      </div>
+      <div style="margin-top:12px;" class="log" id="upload-log"></div>
+    </section>
+
+    <section class="card">
+      <div class="muted" style="margin-bottom:8px;">Recent Uploads (local)</div>
+      <table>
+        <thead>
+          <tr><th>File</th><th>Size</th><th>File ID</th><th>Chunk Size</th><th>When</th><th></th></tr>
+        </thead>
+        <tbody id="uploads-body"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const baseUrlInput = document.getElementById('base-url');
+    const tokenInput = document.getElementById('admin-token');
+    const logEl = document.getElementById('upload-log');
+    const uploadsBody = document.getElementById('uploads-body');
+
+    const STORAGE_KEY = 'dfs_uploads';
+    const SETTINGS_KEY = 'dfs_settings';
+
+    function loadSettings() {
+      try {
+        const raw = localStorage.getItem(SETTINGS_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        baseUrlInput.value = parsed.baseUrl || '';
+        tokenInput.value = parsed.token || '';
+      } catch (e) {
+        console.warn('settings load failed', e);
+      }
+    }
+
+    function saveSettings() {
+      const data = { baseUrl: baseUrlInput.value.trim(), token: tokenInput.value.trim() };
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(data));
+      statusEl.textContent = 'Settings saved';
+    }
+
+    function getBaseUrl() {
+      return baseUrlInput.value.trim() || window.location.origin;
+    }
+
+    function authHeaders() {
+      const token = tokenInput.value.trim();
+      return token ? { 'x-api-key': token } : {};
+    }
+
+    function appendLog(msg) {
+      logEl.textContent += `${msg}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function fmtBytes(bytes) {
+      if (!Number.isFinite(bytes)) return '-';
+      const units = ['B','KB','MB','GB','TB'];
+      let i = 0; let v = bytes;
+      while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+      return `${v.toFixed(1)} ${units[i]}`;
+    }
+
+    function loadUploads() {
+      uploadsBody.innerHTML = '';
+      let items = [];
+      try { items = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch (e) { items = []; }
+      items.forEach(item => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${item.file_name}</td>
+          <td>${fmtBytes(item.file_size)}</td>
+          <td class="muted" style="font-size:12px;">${item.file_id}</td>
+          <td>${fmtBytes(item.chunk_size)}</td>
+          <td class="muted" style="font-size:12px;">${new Date(item.uploaded_at).toLocaleString()}</td>
+          <td><button data-id="${item.file_id}" data-name="${item.file_name}" class="download-row">Download</button></td>
+        `;
+        uploadsBody.appendChild(tr);
+      });
+      uploadsBody.querySelectorAll('.download-row').forEach(btn => {
+        btn.addEventListener('click', () => downloadFile(btn.dataset.id, btn.dataset.name));
+      });
+    }
+
+    function saveUpload(item) {
+      let items = [];
+      try { items = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch (e) { items = []; }
+      items.unshift(item);
+      items = items.slice(0, 20);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+      loadUploads();
+    }
+
+    async function requestUploadPlan(file, chunkSizeMb) {
+      const body = {
+        file_name: file.name,
+        file_size: file.size,
+      };
+      if (chunkSizeMb) {
+        body.chunk_size = Math.max(1, Math.floor(chunkSizeMb * 1024 * 1024));
+      }
+      const resp = await fetch(`${getBaseUrl()}/plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) throw new Error(`/plan -> ${resp.status}`);
+      return resp.json();
+    }
+
+    async function uploadChunk({ file, placement, replica, chunkSize }) {
+      const start = placement.chunk_index * chunkSize;
+      const end = Math.min(file.size, start + chunkSize);
+      const blob = file.slice(start, end);
+
+      const form = new FormData();
+      form.append('file_id', placement.file_id || '');
+      form.append('chunk_id', placement.chunk_id);
+      form.append('chunk_index', placement.chunk_index);
+      form.append('node_id', replica.node_id);
+      form.append('node_host', replica.host);
+      form.append('node_port', replica.grpc_port);
+      form.append('chunk', blob, `${placement.chunk_id}.bin`);
+
+      const resp = await fetch(`${getBaseUrl()}/upload/chunk`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: form,
+      });
+      if (!resp.ok) throw new Error(`/upload/chunk -> ${resp.status}`);
+      const json = await resp.json();
+      if (!json.ok) throw new Error(json.reason || 'chunk upload failed');
+      return true;
+    }
+
+    async function startUpload() {
+      const file = document.getElementById('file-input').files[0];
+      const chunkSizeMb = Number(document.getElementById('chunk-size').value);
+      if (!file) {
+        statusEl.textContent = 'Select a file first';
+        return;
+      }
+      logEl.textContent = '';
+      statusEl.textContent = 'Requesting plan...';
+      try {
+        const plan = await requestUploadPlan(file, chunkSizeMb);
+        appendLog(`plan: file_id=${plan.file_id} chunk_size=${plan.chunk_size} replicas=${plan.replication_factor}`);
+
+        // hydrate placement with file_id for later reads
+        plan.placements.forEach(p => p.file_id = plan.file_id);
+
+        for (const placement of plan.placements) {
+          for (const replica of placement.replicas) {
+            appendLog(`chunk ${placement.chunk_index} -> ${replica.node_id} (${replica.host}:${replica.grpc_port})`);
+            await uploadChunk({ file, placement, replica, chunkSize: plan.chunk_size });
+          }
+        }
+
+        appendLog('upload complete');
+        statusEl.textContent = 'Upload done';
+        saveUpload({
+          file_id: plan.file_id,
+          file_name: file.name,
+          file_size: file.size,
+          chunk_size: plan.chunk_size,
+          uploaded_at: Date.now(),
+        });
+      } catch (err) {
+        console.error(err);
+        appendLog(`error: ${err.message}`);
+        statusEl.textContent = 'Error';
+      }
+    }
+
+    async function downloadFile(fileId, filenameOverride) {
+      if (!fileId) {
+        fileId = document.getElementById('download-id').value.trim();
+      }
+      const saveName = filenameOverride || document.getElementById('download-name').value.trim() || `${fileId}.bin`;
+      if (!fileId) {
+        statusEl.textContent = 'Enter a file id';
+        return;
+      }
+      statusEl.textContent = 'Downloading...';
+      try {
+        const resp = await fetch(`${getBaseUrl()}/download/${fileId}`, { headers: authHeaders() });
+        if (!resp.ok) throw new Error(`/download/${fileId} -> ${resp.status}`);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = saveName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        statusEl.textContent = 'Download complete';
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = `Download failed: ${err.message}`;
+      }
+    }
+
+    document.getElementById('upload-btn').addEventListener('click', startUpload);
+    document.getElementById('download-btn').addEventListener('click', () => downloadFile());
+    document.getElementById('save-settings').addEventListener('click', saveSettings);
+
+    loadSettings();
+    loadUploads();
+    statusEl.textContent = 'Ready';
+  </script>
+</body>
+</html>

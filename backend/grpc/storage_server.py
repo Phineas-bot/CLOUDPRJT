@@ -6,6 +6,7 @@ from typing import Optional
 
 import grpc
 
+from backend.common import metrics
 from backend.storage.node_server import StorageNode
 
 try:
@@ -13,6 +14,13 @@ try:
     from backend.proto.generated import distributed_storage_pb2_grpc as pb2_grpc
 except ImportError as exc:  # pragma: no cover
     raise RuntimeError("Run scripts/gen_protos.ps1 to generate gRPC stubs") from exc
+
+
+GRPC_MAX_MB = 64
+GRPC_CHANNEL_OPTS = [
+    ("grpc.max_send_message_length", GRPC_MAX_MB * 1024 * 1024),
+    ("grpc.max_receive_message_length", GRPC_MAX_MB * 1024 * 1024),
+]
 
 
 class StorageGrpc(pb2_grpc.StorageServiceServicer):
@@ -45,11 +53,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", default=os.getenv("DATA_DIR", "data/node1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "50051")))
     parser.add_argument("--host", default=os.getenv("HOST", "0.0.0.0"))
+    parser.add_argument("--capacity-bytes", type=int, default=int(os.getenv("NODE_CAPACITY_BYTES", "0")))
     return parser.parse_args()
 
 
 def _address(host: str, port: int) -> str:
     return f"{host}:{port}"
+
+
+async def _storage_stub(host: str, port: int):
+    channel = grpc.aio.insecure_channel(_address(host, port), options=GRPC_CHANNEL_OPTS)
+    stub = pb2_grpc.StorageServiceStub(channel)
+    return channel, stub
 
 
 async def heartbeat_loop(node: StorageNode, stub: pb2_grpc.MasterServiceStub, node_id: str, interval: float) -> None:
@@ -80,10 +95,12 @@ async def replicate_chunk(node: StorageNode, instr: pb2.RebalanceInstruction, ma
         placement = next((p for p in meta.placements if p.chunk_id == instr.chunk_id), None)
         if not placement:
             logging.warning("rebalance: no placement metadata for chunk %s", instr.chunk_id)
+            metrics.REBALANCE_FAILED.inc()
             return
         source = next((r for r in placement.replicas if r.node_id == instr.source_node_id), None)
         if not source or not source.host or not source.grpc_port:
             logging.warning("rebalance: source node %s missing host/port", instr.source_node_id)
+            metrics.REBALANCE_FAILED.inc()
             return
 
         # Download chunk from source
@@ -94,6 +111,7 @@ async def replicate_chunk(node: StorageNode, instr: pb2.RebalanceInstruction, ma
             logging.warning(
                 "rebalance: failed to pull chunk %s from %s reason=%s", instr.chunk_id, instr.source_node_id, resp.reason
             )
+            metrics.REBALANCE_FAILED.inc()
             return
 
         file_id, idx = node.parse_chunk_id(instr.chunk_id)
@@ -108,14 +126,16 @@ async def replicate_chunk(node: StorageNode, instr: pb2.RebalanceInstruction, ma
             )
         )
         logging.info("rebalance: chunk %s replicated to %s", instr.chunk_id, instr.target_node_id)
+        metrics.REBALANCE_SUCCEEDED.inc()
     except Exception as exc:  # pragma: no cover - defensive logging
         logging.warning("rebalance: failed to replicate %s to %s: %s", instr.chunk_id, instr.target_node_id, exc)
+        metrics.REBALANCE_FAILED.inc()
 
 
 async def serve(args: Optional[argparse.Namespace] = None) -> None:
     args = args or _parse_args()
-    node = StorageNode(args.node_id, args.data_dir)
-    server = grpc.aio.server()
+    node = StorageNode(args.node_id, args.data_dir, capacity_bytes=args.capacity_bytes or None)
+    server = grpc.aio.server(options=GRPC_CHANNEL_OPTS)
     pb2_grpc.add_StorageServiceServicer_to_server(StorageGrpc(node), server)
     server.add_insecure_port(_address(args.host, args.port))
     logging.info("Storage node %s listening on %s", args.node_id, _address(args.host, args.port))
@@ -123,7 +143,12 @@ async def serve(args: Optional[argparse.Namespace] = None) -> None:
     # Register with master if configured
     master_host = os.getenv("DFS_MASTER_HOST", "localhost")
     master_port = int(os.getenv("DFS_MASTER_PORT", "50050"))
-    register_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
+    if os.getenv("DFS_MASTER_TLS", "0") == "1":
+        ca_path = os.getenv("DFS_MASTER_CA", "")
+        creds = grpc.ssl_channel_credentials(root_certificates=open(ca_path, "rb").read() if ca_path else None)
+        register_channel = grpc.aio.secure_channel(f"{master_host}:{master_port}", creds)
+    else:
+        register_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}", options=GRPC_CHANNEL_OPTS)
     register_stub = pb2_grpc.MasterServiceStub(register_channel)
     capacity, free = node.disk_stats()
     public_host = os.getenv("NODE_PUBLIC_HOST", args.host)
@@ -146,9 +171,15 @@ async def serve(args: Optional[argparse.Namespace] = None) -> None:
         logging.warning("Failed to register node with master: %s", exc)
 
     # Heartbeat loop
-    hb_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}")
+    if os.getenv("DFS_MASTER_TLS", "0") == "1":
+        ca_path = os.getenv("DFS_MASTER_CA", "")
+        creds = grpc.ssl_channel_credentials(root_certificates=open(ca_path, "rb").read() if ca_path else None)
+        hb_channel = grpc.aio.secure_channel(f"{master_host}:{master_port}", creds)
+    else:
+        hb_channel = grpc.aio.insecure_channel(f"{master_host}:{master_port}", options=GRPC_CHANNEL_OPTS)
     hb_stub = pb2_grpc.MasterServiceStub(hb_channel)
     interval = int(os.getenv("DFS_HEARTBEAT_INTERVAL", "5"))
+    metrics.maybe_start_metrics_server(int(os.getenv("DFS_STORAGE_METRICS_PORT", "0")) or None)
     task = asyncio.create_task(heartbeat_loop(node, hb_stub, args.node_id, interval))
 
     await server.start()

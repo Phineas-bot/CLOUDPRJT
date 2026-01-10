@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --card: #1f2937;
+      --accent: #22d3ee;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --error: #f87171;
+      --ok: #34d399;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Archivo", "Segoe UI", sans-serif;
+      background: radial-gradient(circle at 20% 20%, rgba(34,211,238,0.12), transparent 35%),
+                  radial-gradient(circle at 80% 0%, rgba(52,211,153,0.08), transparent 40%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 24px;
+      border-bottom: 1px solid #1e293b;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      background: rgba(15, 23, 42, 0.8);
+      backdrop-filter: blur(8px);
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 0.5px; }
+    input[type="text"] {
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #1f2937;
+      background: #0b1220;
+      color: var(--text);
+    }
+    button {
+      background: var(--accent);
+      color: #0f172a;
+      border: none;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 120ms ease, box-shadow 120ms ease;
+      box-shadow: 0 10px 30px rgba(34, 211, 238, 0.25);
+    }
+    button:hover { transform: translateY(-1px); box-shadow: 0 12px 36px rgba(34, 211, 238, 0.35); }
+    button:active { transform: translateY(0); }
+    main { padding: 24px; display: grid; gap: 16px; }
+    .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .card {
+      background: var(--card);
+      border: 1px solid #1f2937;
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.25);
+    }
+    .metric { font-size: 32px; font-weight: 800; }
+    .label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px; text-align: left; }
+    th { color: var(--muted); font-size: 12px; letter-spacing: 0.6px; border-bottom: 1px solid #1f2937; }
+    tr:nth-child(every) { background: #111827; }
+    tr:not(:last-child) td { border-bottom: 1px solid #111827; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; }
+    .pill.ok { background: rgba(52,211,153,0.1); color: var(--ok); }
+    .pill.bad { background: rgba(248,113,113,0.1); color: var(--error); }
+    .small { color: var(--muted); font-size: 12px; }
+    .error-box { border: 1px solid rgba(248,113,113,0.4); background: rgba(248,113,113,0.08); color: var(--error); padding: 10px; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="label">Admin</div>
+      <h1>Cluster Health</h1>
+    </div>
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap: wrap;">
+      <input id="base-url" type="text" placeholder="http://localhost:8000" />
+      <input id="api-key" type="text" placeholder="x-api-key (optional)" />
+      <button id="save-settings">Save</button>
+      <div class="small" id="status"></div>
+      <button id="refresh">Refresh now</button>
+    </div>
+  </header>
+  <main>
+    <section class="grid" id="summary-cards"></section>
+    <section class="card">
+      <div class="label">Nodes</div>
+      <table id="nodes-table">
+        <thead>
+          <tr><th>Node</th><th>Health</th><th>Host</th><th>Free</th><th>Capacity</th><th>Last Seen</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    <section class="card">
+      <div class="label">Pending Rebalances</div>
+      <table id="rebalance-table">
+        <thead>
+          <tr><th>Chunk</th><th>Source</th><th>Target</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    <section class="card">
+      <div class="label">Errors</div>
+      <div id="errors" class="small"></div>
+    </section>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const errorsEl = document.getElementById('errors');
+    const summaryEl = document.getElementById('summary-cards');
+    const nodesBody = document.querySelector('#nodes-table tbody');
+    const rebalanceBody = document.querySelector('#rebalance-table tbody');
+
+    const SETTINGS_KEY = 'admin_settings';
+
+    function loadSettings() {
+      try {
+        const raw = localStorage.getItem(SETTINGS_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        document.getElementById('base-url').value = parsed.baseUrl || '';
+        document.getElementById('api-key').value = parsed.token || '';
+      } catch (err) {
+        console.warn('settings load failed', err);
+      }
+    }
+
+    function saveSettings() {
+      const payload = {
+        baseUrl: document.getElementById('base-url').value.trim(),
+        token: document.getElementById('api-key').value.trim(),
+      };
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
+      statusEl.textContent = 'Settings saved';
+    }
+
+    function baseUrl() {
+      return document.getElementById('base-url').value.trim() || window.location.origin;
+    }
+
+    function authHeaders() {
+      const token = document.getElementById('api-key').value.trim();
+      return token ? { 'x-api-key': token } : {};
+    }
+
+    async function fetchJson(path) {
+      const resp = await fetch(`${baseUrl()}${path}`, { headers: authHeaders() });
+      if (!resp.ok) throw new Error(`${path} -> ${resp.status}`);
+      return resp.json();
+    }
+
+    function fmtBytes(bytes) {
+      if (!Number.isFinite(bytes)) return '-';
+      const units = ['B','KB','MB','GB','TB'];
+      let i = 0; let v = bytes;
+      while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+      return `${v.toFixed(1)} ${units[i]}`;
+    }
+
+    function fmtTime(sec) {
+      if (!sec) return '-';
+      const d = new Date(sec * 1000);
+      return d.toLocaleString();
+    }
+
+    function setSummary(data) {
+      summaryEl.innerHTML = '';
+      const cards = [
+        { label: 'Nodes', value: data.node_count },
+        { label: 'Healthy', value: data.healthy_nodes },
+        { label: 'Pending Rebalances', value: data.pending_rebalances },
+      ];
+      cards.forEach(c => {
+        const div = document.createElement('div');
+        div.className = 'card';
+        div.innerHTML = `<div class="label">${c.label}</div><div class="metric">${c.value}</div>`;
+        summaryEl.appendChild(div);
+      });
+    }
+
+    function setNodes(nodes) {
+      nodesBody.innerHTML = '';
+      nodes.forEach(n => {
+        const tr = document.createElement('tr');
+        const pillClass = n.healthy ? 'pill ok' : 'pill bad';
+        const pillLabel = n.healthy ? 'Healthy' : 'Unhealthy';
+        tr.innerHTML = `
+          <td>${n.node_id}</td>
+          <td><span class="${pillClass}">${pillLabel}</span></td>
+          <td>${n.host}:${n.grpc_port}</td>
+          <td>${fmtBytes(n.free_bytes)}</td>
+          <td>${fmtBytes(n.capacity_bytes)}</td>
+          <td class="small">${fmtTime(n.last_seen)}</td>
+        `;
+        nodesBody.appendChild(tr);
+      });
+    }
+
+    function setRebalances(items) {
+      rebalanceBody.innerHTML = '';
+      if (!items.length) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="3" class="small" style="color: var(--muted);">None pending</td>';
+        rebalanceBody.appendChild(tr);
+        return;
+      }
+      items.forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${r.chunk_id}</td><td>${r.source_node_id || '-'}</td><td>${r.target_node_id}</td>`;
+        rebalanceBody.appendChild(tr);
+      });
+    }
+
+    async function refresh() {
+      errorsEl.textContent = '';
+      statusEl.textContent = 'Refreshing…';
+      try {
+        const [summary, nodes, rebalances] = await Promise.all([
+          fetchJson('/admin/summary'),
+          fetchJson('/admin/nodes'),
+          fetchJson('/admin/rebalances'),
+        ]);
+        setSummary(summary);
+        setNodes(nodes);
+        setRebalances(rebalances);
+        statusEl.textContent = 'Updated';
+      } catch (err) {
+        console.error(err);
+        errorsEl.innerHTML = `<div class="error-box">${err.message}</div>`;
+        statusEl.textContent = 'Error';
+      }
+    }
+
+    document.getElementById('refresh').addEventListener('click', refresh);
+    document.getElementById('save-settings').addEventListener('click', saveSettings);
+    loadSettings();
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

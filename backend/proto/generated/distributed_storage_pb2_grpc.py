@@ -5,7 +5,7 @@ import warnings
 
 import distributed_storage_pb2 as distributed__storage__pb2
 
-GRPC_GENERATED_VERSION = '1.76.0'
+GRPC_GENERATED_VERSION = '1.68.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -18,7 +18,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in distributed_storage_pb2_grpc.py depends on'
+        + f' but the generated code in distributed_storage_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -69,6 +69,26 @@ class MasterServiceStub(object):
                 request_serializer=distributed__storage__pb2.ListRebalancesRequest.SerializeToString,
                 response_deserializer=distributed__storage__pb2.ListRebalancesResponse.FromString,
                 _registered_method=True)
+        self.FailNode = channel.unary_unary(
+                '/dfs.MasterService/FailNode',
+                request_serializer=distributed__storage__pb2.NodeActionRequest.SerializeToString,
+                response_deserializer=distributed__storage__pb2.NodeActionResponse.FromString,
+                _registered_method=True)
+        self.RestoreNode = channel.unary_unary(
+                '/dfs.MasterService/RestoreNode',
+                request_serializer=distributed__storage__pb2.NodeActionRequest.SerializeToString,
+                response_deserializer=distributed__storage__pb2.NodeActionResponse.FromString,
+                _registered_method=True)
+        self.DeleteNode = channel.unary_unary(
+                '/dfs.MasterService/DeleteNode',
+                request_serializer=distributed__storage__pb2.NodeActionRequest.SerializeToString,
+                response_deserializer=distributed__storage__pb2.NodeActionResponse.FromString,
+                _registered_method=True)
+        self.ListFiles = channel.unary_unary(
+                '/dfs.MasterService/ListFiles',
+                request_serializer=distributed__storage__pb2.ListFilesRequest.SerializeToString,
+                response_deserializer=distributed__storage__pb2.ListFilesResponse.FromString,
+                _registered_method=True)
 
 
 class MasterServiceServicer(object):
@@ -116,6 +136,30 @@ class MasterServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def FailNode(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RestoreNode(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteNode(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListFiles(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_MasterServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -153,6 +197,26 @@ def add_MasterServiceServicer_to_server(servicer, server):
                     servicer.ListRebalances,
                     request_deserializer=distributed__storage__pb2.ListRebalancesRequest.FromString,
                     response_serializer=distributed__storage__pb2.ListRebalancesResponse.SerializeToString,
+            ),
+            'FailNode': grpc.unary_unary_rpc_method_handler(
+                    servicer.FailNode,
+                    request_deserializer=distributed__storage__pb2.NodeActionRequest.FromString,
+                    response_serializer=distributed__storage__pb2.NodeActionResponse.SerializeToString,
+            ),
+            'RestoreNode': grpc.unary_unary_rpc_method_handler(
+                    servicer.RestoreNode,
+                    request_deserializer=distributed__storage__pb2.NodeActionRequest.FromString,
+                    response_serializer=distributed__storage__pb2.NodeActionResponse.SerializeToString,
+            ),
+            'DeleteNode': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteNode,
+                    request_deserializer=distributed__storage__pb2.NodeActionRequest.FromString,
+                    response_serializer=distributed__storage__pb2.NodeActionResponse.SerializeToString,
+            ),
+            'ListFiles': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListFiles,
+                    request_deserializer=distributed__storage__pb2.ListFilesRequest.FromString,
+                    response_serializer=distributed__storage__pb2.ListFilesResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -344,6 +408,114 @@ class MasterService(object):
             '/dfs.MasterService/ListRebalances',
             distributed__storage__pb2.ListRebalancesRequest.SerializeToString,
             distributed__storage__pb2.ListRebalancesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def FailNode(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfs.MasterService/FailNode',
+            distributed__storage__pb2.NodeActionRequest.SerializeToString,
+            distributed__storage__pb2.NodeActionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RestoreNode(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfs.MasterService/RestoreNode',
+            distributed__storage__pb2.NodeActionRequest.SerializeToString,
+            distributed__storage__pb2.NodeActionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteNode(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfs.MasterService/DeleteNode',
+            distributed__storage__pb2.NodeActionRequest.SerializeToString,
+            distributed__storage__pb2.NodeActionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListFiles(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfs.MasterService/ListFiles',
+            distributed__storage__pb2.ListFilesRequest.SerializeToString,
+            distributed__storage__pb2.ListFilesResponse.FromString,
             options,
             channel_credentials,
             insecure,

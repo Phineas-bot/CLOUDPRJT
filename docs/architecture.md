@@ -10,7 +10,7 @@
 - **Master/Controller (Python + gRPC)**: Source of truth for metadata (files, chunks, node health). Plans placements, tracks heartbeats, schedules re-replication.
 - **Storage Node (Python + gRPC)**: Stores chunk files on local disk; exposes upload/download/delete + heartbeat.
 - **React User Dashboard**: Drive-like UI for end users (upload, list, download, delete, usage).
-- **React Admin Dashboard**: Node list/health, add/remove/fail simulation, replication/usage status.
+- **React Admin Dashboard**: Node list/health, add/remove/fail simulation, replication/usage status. Wire to Gateway endpoints `/admin/nodes`, `/admin/rebalances`, and `/admin/summary` for health and rebalance counts.
 
 ## Data Model (Master)
 - **File**: `file_id`, `name`, `size`, `chunk_size`, `total_chunks`.

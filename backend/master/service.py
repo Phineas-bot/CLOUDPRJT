@@ -1,6 +1,7 @@
 import time
-from typing import Optional
+from typing import List, Optional
 
+from backend.common import metrics
 from backend.common.config import Settings, load_settings
 from backend.master import placement
 from backend.master.metadata_store import ChunkPlacement, FileRecord, MetadataStore, NodeState
@@ -32,24 +33,45 @@ class MasterService:
     def plan_rebalances(self) -> list[tuple[str, str, str]]:
         healthy = {n.node_id: n for n in self.store.list_healthy_nodes()}
         instructions: list[tuple[str, str, str]] = []
+        target_counts = {}
         for file in self.store._files.values():  # pylint: disable=protected-access
+            chunk_bytes = file.chunk_size or self.settings.chunk_size
             for placement in file.placements:
                 # keep only healthy replicas
                 healthy_replicas = [rid for rid in placement.replicas if rid in healthy]
-                if len(healthy_replicas) >= self.settings.replication_factor:
+                deficit = self.settings.replication_factor - len(healthy_replicas)
+                if deficit <= 0:
                     continue
-                # choose a new target not already present
-                candidates = [nid for nid in healthy if nid not in placement.replicas]
-                if not candidates:
-                    continue
-                target = candidates[0]
-                source = placement.replicas[0] if placement.replicas else ""
-                instructions.append((placement.chunk_id, source, target))
+
+                # candidate targets: healthy nodes not already holding the chunk with enough free space
+                candidate_targets = [
+                    n for n in healthy.values() if n.node_id not in placement.replicas and n.free_bytes >= chunk_bytes
+                ]
+                candidate_targets.sort(key=lambda n: (-(n.load_factor or 0.0), n.free_bytes, n.capacity_bytes), reverse=True)
+
+                # choose a source replica with the most free space (bias toward healthier hosts)
+                source_candidates = sorted(
+                    (healthy[rid] for rid in healthy_replicas), key=lambda n: (n.free_bytes, n.capacity_bytes), reverse=True
+                )
+                # Prefer healthy source with most free space; fallback to the first recorded replica even if now unhealthy
+                source_node_id = source_candidates[0].node_id if source_candidates else (placement.replicas[0] if placement.replicas else "")
+
+                assigned = 0
+                for target in candidate_targets:
+                    if target_counts.get(target.node_id, 0) >= self.settings.rebalance_max_per_node:
+                        continue
+                    instructions.append((placement.chunk_id, source_node_id, target.node_id))
+                    target_counts[target.node_id] = target_counts.get(target.node_id, 0) + 1
+                    assigned += 1
+                    if assigned >= deficit:
+                        break
         return instructions
 
     def refresh_rebalances(self) -> list[tuple[str, str, str]]:
         """Recompute and store pending rebalances for later delivery."""
         self.pending_rebalances = self.plan_rebalances()
+        if self.pending_rebalances:
+            metrics.REBALANCE_PLANNED.inc(len(self.pending_rebalances))
         return self.pending_rebalances
 
     def list_rebalances(self) -> list[tuple[str, str, str]]:
@@ -65,13 +87,25 @@ class MasterService:
             else:
                 remaining.append((chunk_id, source_node, target_node))
         self.pending_rebalances = remaining
+        if targeted:
+            metrics.REBALANCE_DELIVERED.inc(len(targeted))
         return targeted
 
     def get_upload_plan(self, file_id: str, file_name: str, file_size: int, requested_chunk_size: Optional[int] = None) -> tuple[int, list[ChunkPlacement]]:
-        if requested_chunk_size and requested_chunk_size > 0:
-            self.settings.chunk_size = requested_chunk_size
+        # Respect per-request chunk size overrides without mutating global settings
+        chunk_size_override = requested_chunk_size if requested_chunk_size and requested_chunk_size > 0 else None
         healthy = self.store.list_healthy_nodes()
-        chunk_size, placements = placement.plan_upload(file_id, file_name, file_size, self.settings, healthy)
+        effective_settings = self.settings
+        if chunk_size_override:
+            effective_settings = Settings(
+                chunk_size=chunk_size_override,
+                replication_factor=self.settings.replication_factor,
+                heartbeat_interval=self.settings.heartbeat_interval,
+                heartbeat_timeout=self.settings.heartbeat_timeout,
+                rebalance_interval=self.settings.rebalance_interval,
+                rebalance_max_per_node=self.settings.rebalance_max_per_node,
+            )
+        chunk_size, placements = placement.plan_upload(file_id, file_name, file_size, effective_settings, healthy)
 
         # Persist initial file record with planned placements
         record = FileRecord(
@@ -99,3 +133,15 @@ class MasterService:
 
     def get_file_metadata(self, file_id: str) -> Optional[FileRecord]:
         return self.store.get_file(file_id)
+
+    def fail_node(self, node_id: str) -> bool:
+        return self.store.set_health(node_id, False)
+
+    def restore_node(self, node_id: str) -> bool:
+        return self.store.set_health(node_id, True)
+
+    def delete_node(self, node_id: str) -> bool:
+        return self.store.delete_node(node_id)
+
+    def list_files(self) -> List[FileRecord]:
+        return self.store.list_files()
