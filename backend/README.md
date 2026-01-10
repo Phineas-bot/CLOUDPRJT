@@ -18,6 +18,10 @@ This backend is written in Python and uses gRPC for all inter-service calls. Rea
 
 Env hints:
 - Set `DFS_AUTH_SECRET` to a strong value (required for JWT + OTP hashing).
+- Email OTP options:
+	- SendGrid (preferred): `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`.
+	- SMTP fallback: `SMTP_HOST`, `SMTP_PORT` (default 587), `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM_EMAIL` (defaults to `SENDGRID_FROM_EMAIL` if set), optional `SMTP_STARTTLS` (default 1 to enable).
+- SMS OTP delivery: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`.
 
 ## Notes
 - Metadata is in-memory for now; snapshotting can be added in `master/metadata_store.py`.

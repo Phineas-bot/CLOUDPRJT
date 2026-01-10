@@ -18,6 +18,14 @@ services:
     environment:
       DFS_MASTER_HOST: master
       DFS_MASTER_PORT: 50050
+      SENDGRID_API_KEY: "${SENDGRID_API_KEY:?set your SendGrid API key}"
+      SENDGRID_FROM_EMAIL: "ngnindem0@gmail.com"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASS: "${SMTP_PASS:-}"
+      SMTP_FROM_EMAIL: "ngnindem0@gmail.com"
+      SMTP_STARTTLS: "${SMTP_STARTTLS:-1}"
     depends_on:
       - master
     ports:

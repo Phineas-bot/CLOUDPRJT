@@ -22,6 +22,7 @@ const SESSION_KEY = 'dfs_user_session';
 const CHUNK_LOG_KEY = 'dfs_chunk_activity';
 const MB = 1024 * 1024;
 const STORAGE_LIMIT_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB per user
+// Default to gateway's local port from docker-compose/run_local
 const BASE_URL = import.meta.env.VITE_GATEWAY_URL ?? 'http://localhost:8000';
 
 type ChunkLogEntry = { message: string; ts: number };
